@@ -194,7 +194,9 @@ export default function MarketplaceView({ users, requests, emptyReturns, onBookE
                     <div className="flex justify-between items-center mb-1">
                       <span className="text-[11px] text-gray-500 flex items-center gap-1">
                         Base Transporteur Réduit
-                        <Info className="h-3 w-3 text-gray-400" title="Prix net proposé par le transporteur pour optimiser son trajet de retour" />
+                        <span title="Prix net proposé par le transporteur pour optimiser son trajet de retour">
+                          <Info className="h-3 w-3 text-gray-400" />
+                        </span>
                       </span>
                       <span className="text-xs text-gray-600 font-medium">{item.basePriceDHS} DHS</span>
                     </div>

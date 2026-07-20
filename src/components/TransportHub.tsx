@@ -195,7 +195,7 @@ export default function TransportHub({
 
     // Create or update markers for all vehicles
     vehicles.forEach(v => {
-      const loc = gpsLocations[v.id] || { lat: 31.6295, lng: -7.9811, speed: 0, status: 'stopped', locationName: 'Marrakech Center' };
+      const loc = gpsLocations[v.id] || { lat: 31.6295, lng: -7.9811, speed: 0, status: 'stopped', locationName: 'Marrakech Center', fuel: 50 };
       const isSelected = selectedGpsVehicleId === v.id;
 
       // HTML template for highly styled moving icon using custom markers
@@ -3395,7 +3395,7 @@ export default function TransportHub({
 
                         <div className="space-y-2 max-h-[170px] overflow-y-auto pr-1">
                           {vehicles.map(v => {
-                            const loc = gpsLocations[v.id] || { speed: 64, status: 'moving', locationName: 'Avenue de France' };
+                            const loc = gpsLocations[v.id] || { lat: 31.6295, lng: -7.9811, speed: 64, status: 'moving', locationName: 'Avenue de France', fuel: 75 };
                             const isSelected = selectedGpsVehicleId === v.id;
                             return (
                               <div
@@ -3431,7 +3431,7 @@ export default function TransportHub({
                       {(() => {
                         const activeVeh = vehicles.find(v => v.id === selectedGpsVehicleId) || vehicles[0];
                         if (!activeVeh) return null;
-                        const activeLoc = gpsLocations[activeVeh.id] || { speed: 64, status: 'moving', locationName: 'Avenue de France', fuel: 75 };
+                        const activeLoc = gpsLocations[activeVeh.id] || { lat: 31.6295, lng: -7.9811, speed: 64, status: 'moving', locationName: 'Avenue de France', fuel: 75 };
 
                         return (
                           <div className="bg-slate-900 text-white rounded-xl p-4 space-y-3 shrink-0">
@@ -7231,7 +7231,7 @@ export default function TransportHub({
                                       <span>⌛ Durée : {exc.duration}</span>
                                       <span className="flex items-center gap-0.5 text-amber-500">★ 4.9 (142 avis)</span>
                                     </div>
-                                    <h3 className="text-xs font-black text-gray-900 leading-snug hover:text-emerald-600 transition" style={{ hoverColor: siteForm.primaryColor }}>{exc.title}</h3>
+                                    <h3 className="text-xs font-black text-gray-900 leading-snug hover:text-emerald-600 transition">{exc.title}</h3>
                                     <p className="text-[10.5px] text-gray-500 leading-relaxed line-clamp-3 font-medium">{exc.description}</p>
                                     
                                     {/* Viator Style Highlights */}

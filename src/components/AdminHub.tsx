@@ -1108,6 +1108,7 @@ export default function AdminHub({
                                     setPayoutDisputes(prev => [
                                       {
                                         id: `disp-${Date.now()}`,
+                                        date: new Date().toISOString().split('T')[0],
                                         bookingId: t.id,
                                         transporterName: t.transporter,
                                         amount: Math.round(t.montantBrut * 0.30),

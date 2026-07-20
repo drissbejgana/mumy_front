@@ -1039,16 +1039,15 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
         processed = processed.replace(regex, replacement);
       }
 
-      // Handle French "DHS" and pricing structures (e.g., "1 200 DHS" -> "1 200 MAD" / "1 200 DHS")
-      if (language !== "fr") {
-        processed = processed.replace(/DHS/g, language === "en" ? "MAD" : "DHS");
-        processed = processed.replace(/dhs/g, language === "en" ? "mad" : "dhs");
-        processed = processed.replace(/Hôtels/g, TRANSLATIONS[language]["Hôtels & Riads"] ? TRANSLATIONS[language]["Hôtels & Riads"].split(" & ")[0] : "Hotels");
-        processed = processed.replace(/Chauffeurs/g, wordDict["Chauffeurs"] || "Drivers");
-        processed = processed.replace(/Chauffeur/g, wordDict["Chauffeur"] || "Driver");
-        processed = processed.replace(/Véhicules/g, wordDict["Véhicules Actifs"] ? wordDict["Véhicules Actifs"].split(" ")[0] : "Vehicles");
-        processed = processed.replace(/Véhicule/g, wordDict["Véhicule"] || "Vehicle");
-      }
+      // Handle "DHS" and pricing structures (e.g., "1 200 DHS" -> "1 200 MAD" / "1 200 DHS")
+      // (language is already known to be non-"fr" here — this function returns early for "fr" above)
+      processed = processed.replace(/DHS/g, language === "en" ? "MAD" : "DHS");
+      processed = processed.replace(/dhs/g, language === "en" ? "mad" : "dhs");
+      processed = processed.replace(/Hôtels/g, TRANSLATIONS[language]["Hôtels & Riads"] ? TRANSLATIONS[language]["Hôtels & Riads"].split(" & ")[0] : "Hotels");
+      processed = processed.replace(/Chauffeurs/g, wordDict["Chauffeurs"] || "Drivers");
+      processed = processed.replace(/Chauffeur/g, wordDict["Chauffeur"] || "Driver");
+      processed = processed.replace(/Véhicules/g, wordDict["Véhicules Actifs"] ? wordDict["Véhicules Actifs"].split(" ")[0] : "Vehicles");
+      processed = processed.replace(/Véhicule/g, wordDict["Véhicule"] || "Vehicle");
     }
 
     return text.replace(trimmed, processed);
