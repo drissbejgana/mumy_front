@@ -7,10 +7,16 @@ import {
   Download, Share2, Upload, ChevronLeft, ChevronRight, Globe, Compass, ExternalLink, Shield, Award,
   HelpCircle, Info, Database, RefreshCw
 } from "lucide-react";
-import { User, Vehicle, Driver, TransportRequest, Bid, EmptyReturn, FinancialRecord, ChatMessage, AdBanner, Excursion, TransporterWebsite, ExcursionBooking } from "../types";
+import { User, Vehicle, Driver, TransportRequest, Bid, EmptyReturn, FinancialRecord, ChatMessage, AdBanner, Excursion, TransporterWebsite, ExcursionBooking, BusinessDocument } from "../types";
 import SimulationAdBanner from "./SimulationAdBanner";
 import CrmDashboardTab from "./CrmDashboardTab";
 import { useTeamMembers, useAddTeamMember, useUpdateTeamMember, useDeleteTeamMember } from "../hooks/useTeamMembers";
+import { useClientSuppliers, useAddClientSupplier, useDeleteClientSupplier } from "../hooks/useClientSuppliers";
+import { useAddMaintenanceLog, useAddFuelLog } from "../hooks/useVehicles";
+import { useVmsLiaisons, useAddVmsLiaison, useDeleteVmsLiaison } from "../hooks/useVmsLiaisons";
+import { useBusinessDocuments, useCreateBusinessDocument, useShareBusinessDocument } from "../hooks/useBusinessDocuments";
+import { useCreateDirectLead, useUpdateRequestDetails } from "../hooks/useRequests";
+import { directThreadId, useThreadChats, useSendThreadMessage } from "../hooks/useChats";
 import { apiFetch } from "../lib/apiClient";
 
 interface TransportHubProps {
@@ -116,6 +122,27 @@ export default function TransportHub({
   const updateTeamMemberMutation = useUpdateTeamMember();
   const deleteTeamMemberMutation = useDeleteTeamMember();
 
+  // Clients & fournisseurs, weekly VMS planning and issued commercial documents — all three
+  // used to live in component state seeded with mock rows, so every entry the transporter
+  // created vanished on reload. They now read and write the real collections.
+  const { data: partners = [] } = useClientSuppliers();
+  const addPartnerMutation = useAddClientSupplier();
+  const deletePartnerMutation = useDeleteClientSupplier();
+
+  const { data: vmsLiaisons = [] } = useVmsLiaisons();
+  const addVmsLiaisonMutation = useAddVmsLiaison();
+  const deleteVmsLiaisonMutation = useDeleteVmsLiaison();
+
+  const { data: invoiceHistory = [] } = useBusinessDocuments();
+  const createDocumentMutation = useCreateBusinessDocument();
+  const shareDocumentMutation = useShareBusinessDocument();
+
+  const createDirectLeadMutation = useCreateDirectLead();
+  const updateRequestDetailsMutation = useUpdateRequestDetails();
+
+  const addMaintenanceLogMutation = useAddMaintenanceLog();
+  const addFuelLogMutation = useAddFuelLog();
+
   const [teamMemberForm, setTeamMemberForm] = useState({
     name: '',
     email: '',
@@ -138,18 +165,15 @@ export default function TransportHub({
   });
 
   // GPS/Radar specific state
-  const [selectedGpsVehicleId, setSelectedGpsVehicleId] = useState<string>('v-1');
+  const [selectedGpsVehicleId, setSelectedGpsVehicleId] = useState<string>('');
   const [pingingVehicleId, setPingingVehicleId] = useState<string | null>(null);
   const [gpsSimulatedLogs, setGpsSimulatedLogs] = useState<string[]>([
-    `[${new Date().toLocaleTimeString()}] Traceur GPS initialisé. Flotte en ligne.`,
-    `[${new Date().toLocaleTimeString()}] Mercedes Sprinter (12-A-5432) localisé : Marrakech Centre (Gueliz) - 52 km/h`
+    `[${new Date().toLocaleTimeString()}] Aucun boîtier GPS connecté. Connectez votre fournisseur (Samsara, Geotab, Garmin) pour un suivi réel.`
   ]);
-  const [gpsLocations, setGpsLocations] = useState<Record<string, { lat: number; lng: number; speed: number; status: string; locationName: string; fuel: number }>>({
-    'v-1': { lat: 31.6295, lng: -7.9811, speed: 64, status: 'moving', locationName: 'Avenue Mohammed V, Marrakech', fuel: 78 },
-    'v-2': { lat: 31.6420, lng: -7.9950, speed: 0, status: 'idle', locationName: 'Aéroport Marrakech Menara (Dépose)', fuel: 45 },
-    'v-3': { lat: 31.5540, lng: -7.9540, speed: 82, status: 'moving', locationName: 'Route de l\'Ourika, km 12', fuel: 90 },
-    'v-4': { lat: 32.3370, lng: -6.3490, speed: 0, status: 'stopped', locationName: 'Dépôt Principal Marrakech', fuel: 15 }
-  });
+  // Demonstration positions only — Mumy has no telematics integration yet, so these are
+  // generated locally and must never be read as the fleet's actual whereabouts. The panel
+  // states this explicitly (see the banner in the 'gps' sub-tab).
+  const [gpsLocations, setGpsLocations] = useState<Record<string, { lat: number; lng: number; speed: number; status: string; locationName: string; fuel: number }>>({});
 
   // GPS API Provider Integration State
   const [gpsApiPlatform, setGpsApiPlatform] = useState<string>('samsara');
@@ -292,16 +316,11 @@ export default function TransportHub({
   ]);
 
   // GPS Route Playback State
-  const [playbackVehicleId, setPlaybackVehicleId] = useState<string>('v-1');
+  const [playbackVehicleId, setPlaybackVehicleId] = useState<string>('');
   const [playbackIsRunning, setPlaybackIsRunning] = useState<boolean>(false);
   const [playbackProgress, setPlaybackProgress] = useState<number>(0);
   const [playbackSpeed, setPlaybackSpeed] = useState<number>(1);
   const [playbackLogs, setPlaybackLogs] = useState<string[]>([]);
-
-  // Document Attachments State
-  const [attachingRequestId, setAttachingRequestId] = useState<string | null>(null);
-  const [uploadedManifestName, setUploadedManifestName] = useState<string>('');
-  const [uploadedInvoiceName, setUploadedInvoiceName] = useState<string>('');
 
   // Website & Excursions Builder State
   const myWebsite = websites.find(w => w.transporterId === currentUser.id) || {
@@ -506,9 +525,12 @@ export default function TransportHub({
     setShowAddExcursionForm(true);
   };
   
-  // Advanced CRM & Fleet State
-  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>('v-1');
-  const [selectedDriverId, setSelectedDriverId] = useState<string | null>('d-1');
+  // Advanced CRM & Fleet State. These used to be seeded with the mock ids 'v-1'/'d-1',
+  // which match nothing in the database — so the maintenance, fuel and driver-detail
+  // panels targeted a non-existent record and every save 404'd. They now start empty and
+  // latch onto the first real record once the fleet has loaded (see effect below).
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+  const [selectedDriverId, setSelectedDriverId] = useState<string | null>(null);
   const [showAddMaintenanceForm, setShowAddMaintenanceForm] = useState(false);
   const [showAddFuelForm, setShowAddFuelForm] = useState(false);
   
@@ -566,6 +588,18 @@ export default function TransportHub({
   const [editingVehicleId, setEditingVehicleId] = useState<string | null>(null);
   const [showAddVehicleForm, setShowAddVehicleForm] = useState(false);
 
+  // Keep the fleet/driver selections pointing at records that actually exist: pick the
+  // first one when nothing is selected, and drop a selection whose record was deleted.
+  useEffect(() => {
+    const stillExists = vehicles.some(v => v.id === selectedVehicleId);
+    if (!stillExists) setSelectedVehicleId(vehicles[0]?.id ?? null);
+    if (!vehicles.some(v => v.id === selectedGpsVehicleId)) setSelectedGpsVehicleId(vehicles[0]?.id ?? '');
+  }, [vehicles, selectedVehicleId, selectedGpsVehicleId]);
+
+  useEffect(() => {
+    if (!drivers.some(d => d.id === selectedDriverId)) setSelectedDriverId(drivers[0]?.id ?? null);
+  }, [drivers, selectedDriverId]);
+
   const [crmSearch, setCrmSearch] = useState('');
   const [crmCityFilter, setCrmCityFilter] = useState('all');
   const [crmServiceTypeFilter, setCrmServiceTypeFilter] = useState('all');
@@ -588,12 +622,7 @@ export default function TransportHub({
   // Fleet / Vehicle state
   const [newVehicle, setNewVehicle] = useState({ brand: '', model: '', plate: '', capacity: 8, status: 'available' as const });
   
-  // Moroccan Legal and Partners states
-  const [partners, setPartners] = useState<any[]>([
-    { id: 'p-1', name: 'Riad Royal Marrakech', type: 'client', ice: '002354897000041', phone: '+212 5 24 88 99 00', email: 'contact@riadroyal.ma', address: 'Medina, Marrakech' },
-    { id: 'p-2', name: 'Atlas Parts & Tires', type: 'supplier', ice: '001928475000032', phone: '+212 5 24 33 22 11', email: 'pieces@atlasparts.ma', address: 'Sidi Ghanem, Marrakech' },
-    { id: 'p-3', name: 'Hotel Mamounia', type: 'client', ice: '001554879000063', phone: '+212 5 24 38 86 00', email: 'booking@mamounia.ma', address: 'Avenue Bab Jdid, Marrakech' }
-  ]);
+  // Moroccan Legal and Partners states (`partners` itself comes from /api/client-suppliers)
   const [showAddPartnerForm, setShowAddPartnerForm] = useState(false);
   const [partnerForm, setPartnerForm] = useState({
     name: '',
@@ -607,32 +636,19 @@ export default function TransportHub({
   // Company profile configuration state (for Moroccan ICE, IF, Patente, etc)
   const [showLegalConfig, setShowLegalConfig] = useState(false);
   const [legalForm, setLegalForm] = useState({
-    companyName: currentUser?.companyName || 'Atlas Trans Marrakech',
-    ice: currentUser?.ice || '001548796000085',
-    patente: currentUser?.patente || '45879621',
-    rc: currentUser?.rc || '98455-Marrakech',
-    ifFiscal: currentUser?.ifFiscal || '12457896',
-    cnss: currentUser?.cnss || '8547963'
+    // No placeholder identifiers here: these fields end up printed on invoices and quotes
+    // as this company's Moroccan fiscal identity. An empty field must stay empty so the
+    // transporter fills in their real one.
+    companyName: currentUser?.companyName || '',
+    ice: currentUser?.ice || '',
+    patente: currentUser?.patente || '',
+    rc: currentUser?.rc || '',
+    ifFiscal: currentUser?.ifFiscal || '',
+    cnss: currentUser?.cnss || ''
   });
 
-  // VMS state: Vehicle-Driver Planning links (Liaisons et planning hebdomadaire)
-  const [vmsLiaisons, setVmsLiaisons] = useState<Array<{
-    id: string;
-    driverId: string;
-    vehicleId: string;
-    dayOfWeek: 'Lundi' | 'Mardi' | 'Mercredi' | 'Jeudi' | 'Vendredi' | 'Samedi' | 'Dimanche';
-    shift: 'morning' | 'afternoon' | 'night' | 'full_day';
-    startTime: string;
-    endTime: string;
-    date: string;
-    notes?: string;
-  }>>([
-    { id: 'vms-1', driverId: 'd-1', vehicleId: 'v-1', dayOfWeek: 'Lundi', shift: 'full_day', startTime: '08:00', endTime: '18:00', date: '2026-07-06', notes: 'Rotation Standard' },
-    { id: 'vms-2', driverId: 'd-1', vehicleId: 'v-1', dayOfWeek: 'Mardi', shift: 'full_day', startTime: '08:00', endTime: '18:00', date: '2026-07-07', notes: 'Rotation Standard' },
-    { id: 'vms-3', driverId: 'd-2', vehicleId: 'v-2', dayOfWeek: 'Lundi', shift: 'full_day', startTime: '09:00', endTime: '19:00', date: '2026-07-06', notes: 'Service VIP' },
-    { id: 'vms-4', driverId: 'd-2', vehicleId: 'v-2', dayOfWeek: 'Mercredi', shift: 'full_day', startTime: '09:00', endTime: '19:00', date: '2026-07-08', notes: 'Service VIP' },
-  ]);
-
+  // VMS state: Vehicle-Driver Planning links (Liaisons et planning hebdomadaire).
+  // `vmsLiaisons` comes from /api/vms-liaisons — only the form draft is local.
   const [vmsForm, setVmsForm] = useState({
     driverId: '',
     vehicleId: '',
@@ -699,20 +715,20 @@ export default function TransportHub({
   useEffect(() => {
     if (currentUser) {
       setLegalForm({
-        companyName: currentUser.companyName || 'Atlas Trans Marrakech',
-        ice: currentUser.ice || '001548796000085',
-        patente: currentUser.patente || '45879621',
-        rc: currentUser.rc || '98455-Marrakech',
-        ifFiscal: currentUser.ifFiscal || '12457896',
-        cnss: currentUser.cnss || '8547963'
+        companyName: currentUser.companyName || '',
+        ice: currentUser.ice || '',
+        patente: currentUser.patente || '',
+        rc: currentUser.rc || '',
+        ifFiscal: currentUser.ifFiscal || '',
+        cnss: currentUser.cnss || ''
       });
     }
   }, [currentUser]);
 
   // Invoice Items state
-  const [invoiceItems, setInvoiceItems] = useState<Array<{ description: string; quantity: number; unitPrice: number }>>([
-    { description: 'Service de Transfert Aéroport Marrakech → Hôtel (Mercedes Vito VIP)', quantity: 1, unitPrice: 1500 }
-  ]);
+  // Starts empty: a prefilled 1 500 DHS line item shipped straight onto any document the
+  // transporter generated without noticing it.
+  const [invoiceItems, setInvoiceItems] = useState<Array<{ description: string; quantity: number; unitPrice: number }>>([]);
 
   // RFP / Appels d'offres bidding candidates state
   const [activeBidRequestId, setActiveBidRequestId] = useState<string | null>(null);
@@ -723,19 +739,22 @@ export default function TransportHub({
     customMessage: ''
   });
 
-  // Private chat between transporters state
-  const [activePrivateChatPartner, setActivePrivateChatPartner] = useState<string | null>(null);
+  // Private chat between transporters. Both the peer list and the conversation used to be
+  // invented: three fictional companies with hardcoded routes, and a chat that answered
+  // itself on a setTimeout with canned replies attributed to them. Both now come from real
+  // data — the live empty-return marketplace, and the threaded /api/chats collection.
+  const [activePrivateChatPartner, setActivePrivateChatPartner] =
+    useState<{ id: string; name: string } | null>(null);
   const [privateInput, setPrivateInput] = useState('');
-  const [privateChats, setPrivateChats] = useState<Record<string, ChatMessage[]>>({
-    'Vanguard Comfort Marrakech': [
-      { id: 'pm-pre-1', senderId: 'confrere', senderName: 'Vanguard Comfort Marrakech', senderRole: 'transporter', message: 'Bonjour confrère ! Avez-vous des retours à vide disponibles pour ce week-end ?', timestamp: 'Hier' }
-    ]
-  });
-  const [fellowEmptyReturns] = useState([
-    { id: 'fe-1', transporterName: 'Vanguard Comfort Marrakech', origin: 'Casablanca', destination: 'Marrakech', dateTime: '2026-07-10T14:30', price: 950, vehicle: 'Mercedes Vito VIP' },
-    { id: 'fe-2', transporterName: 'Sahara Tours Agadir', origin: 'Marrakech', destination: 'Agadir', dateTime: '2026-07-12T10:00', price: 1100, vehicle: 'Hyundai H1' },
-    { id: 'fe-3', transporterName: 'Atlas Vista Transport', origin: 'Fès', destination: 'Marrakech', dateTime: '2026-07-14T08:00', price: 1400, vehicle: 'Mercedes Sprinter' }
-  ]);
+
+  const privateThreadId = activePrivateChatPartner
+    ? directThreadId(currentUser.id, activePrivateChatPartner.id)
+    : null;
+  const { data: privateMessages = [] } = useThreadChats(privateThreadId);
+  const sendThreadMessageMutation = useSendThreadMessage();
+
+  // Empty returns published by other transporters — the real inter-transporter marketplace.
+  const fellowEmptyReturns = emptyReturns.filter(r => r.transporterId !== currentUser.id);
   const [newItemDesc, setNewItemDesc] = useState('');
   const [newItemQty, setNewItemQty] = useState(1);
   const [newItemPrice, setNewItemPrice] = useState(500);
@@ -749,50 +768,24 @@ export default function TransportHub({
   ];
   const [companyLogoUrl, setCompanyLogoUrl] = useState<string>("https://www.mumy.app/logo.png");
 
-  // Proforma Invoice Generator State
+  // Proforma Invoice Generator State. `invoiceHistory` is served by /api/business-documents;
+  // only the in-progress draft lives here.
   const [invoiceForm, setInvoiceForm] = useState({
-    docType: 'Facture' as 'Devis' | 'Facture' | 'Bon de commande' | 'Facture Proforma',
-    partnerId: 'p-1',
+    docType: 'Facture' as BusinessDocument['docType'],
+    partnerId: '',
     passengerName: 'M. Jean Dupont',
     tvaRate: 20, // Moroccan standard TVA
     notes: 'Inclus accueil pancarte, bouteilles d\'eau de bord, Wi-Fi et frais de péage.'
   });
-  const [generatedDoc, setGeneratedDoc] = useState<any>(null);
+  const [generatedDoc, setGeneratedDoc] = useState<BusinessDocument | null>(null);
 
-  // Historical list of created/shared commercial documents
-  const [invoiceHistory, setInvoiceHistory] = useState<any[]>([
-    {
-      id: 'DEV-14852',
-      docType: 'Devis',
-      date: '05/07/2026',
-      partner: { id: 'p-1', name: 'Riad Royal Marrakech', type: 'client', ice: '002354897000041', phone: '+212 5 24 88 99 00', email: 'contact@riadroyal.ma', address: 'Medina, Marrakech' },
-      passengerName: 'M. Jean Dupont',
-      items: [{ description: 'Transfert Aéroport Marrakech → Riad Royal (Vito VIP)', quantity: 1, unitPrice: 450 }],
-      subtotal: 450,
-      tvaRate: 20,
-      tvaAmount: 90,
-      totalTtc: 540,
-      notes: 'Inclus accueil pancarte, Wi-Fi et boissons fraîches.',
-      status: 'shared',
-      sharedWith: 'Riad Royal Marrakech'
-    },
-    {
-      id: 'FACT-85472',
-      docType: 'Facture',
-      date: '06/07/2026',
-      partner: { id: 'p-3', name: 'Hotel Mamounia', type: 'client', ice: '001554879000063', phone: '+212 5 24 38 86 00', email: 'booking@mamounia.ma', address: 'Avenue Bab Jdid, Marrakech' },
-      passengerName: 'Mme. Sarah Larson',
-      items: [{ description: 'Excursion d\'une journée Vallée de l\'Ourika (Minibus Sprinter)', quantity: 1, unitPrice: 1500 }],
-      subtotal: 1500,
-      tvaRate: 10,
-      tvaAmount: 150,
-      totalTtc: 1650,
-      notes: 'Frais de péage et parking inclus.',
-      status: 'created',
-      sharedWith: null
+  // The partner dropdown defaults to the first real répertoire entry once it has loaded.
+  useEffect(() => {
+    if (!invoiceForm.partnerId && partners.length > 0) {
+      setInvoiceForm(prev => ({ ...prev, partnerId: partners[0].id }));
     }
-  ]);
-  
+  }, [partners, invoiceForm.partnerId]);
+
   // Return à Vide state
   const [newReturn, setNewReturn] = useState({ origin: 'Essaouira', destination: 'Marrakech', dateTime: '', basePriceDHS: 1000, vehicleType: 'Minibus Sprinter' });
 
@@ -825,75 +818,94 @@ export default function TransportHub({
 
   const handleAddVehicleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newVehicle.brand || !newVehicle.plate) return;
-    onAddVehicle(newVehicle);
+    // `model` is required by the Vehicle schema too — omitting it from this check meant the
+    // backend rejected the create with a 400 while the UI still cleared the form and
+    // announced success.
+    if (!newVehicle.brand.trim() || !newVehicle.model.trim() || !newVehicle.plate.trim()) {
+      alert("La marque, le modèle et la plaque d'immatriculation sont obligatoires.");
+      return;
+    }
+    onAddVehicle({ ...newVehicle, capacity: Number(newVehicle.capacity) });
     setNewVehicle({ brand: '', model: '', plate: '', capacity: 8, status: 'available' });
     setSuccessMessage("Véhicule ajouté avec succès à votre flotte !");
   };
 
   const handleAddMaintenanceSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedVehicleId) return;
     const currentVehicle = vehicles.find(v => v.id === selectedVehicleId);
-    if (!currentVehicle) return;
+    if (!currentVehicle) {
+      alert("Sélectionnez d'abord un véhicule de votre flotte.");
+      return;
+    }
 
-    const newLog = {
-      id: `m-${Math.floor(100 + Math.random() * 900)}`,
-      date: maintenanceForm.date,
-      type: maintenanceForm.type,
-      cost: Number(maintenanceForm.cost),
-      description: maintenanceForm.description,
-      provider: maintenanceForm.provider
-    };
-
-    const existingLogs = currentVehicle.maintenanceLogs || [];
-    onUpdateVehicle(selectedVehicleId, {
-      maintenanceLogs: [...existingLogs, newLog]
-    });
-
-    setMaintenanceForm({
-      date: new Date().toISOString().split('T')[0],
-      type: 'oil_change',
-      cost: 500,
-      description: '',
-      provider: ''
-    });
-    setShowAddMaintenanceForm(false);
-    setSuccessMessage("Entretien enregistré avec succès pour ce véhicule !");
+    addMaintenanceLogMutation.mutate(
+      {
+        vehicleId: currentVehicle.id,
+        log: {
+          date: maintenanceForm.date,
+          type: maintenanceForm.type,
+          cost: Number(maintenanceForm.cost),
+          description: maintenanceForm.description,
+          provider: maintenanceForm.provider
+        }
+      },
+      {
+        onSuccess: () => {
+          setMaintenanceForm({
+            date: new Date().toISOString().split('T')[0],
+            type: 'oil_change',
+            cost: 500,
+            description: '',
+            provider: ''
+          });
+          setShowAddMaintenanceForm(false);
+          setSuccessMessage("Entretien enregistré avec succès pour ce véhicule !");
+        }
+      }
+    );
   };
 
   const handleAddFuelSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedVehicleId) return;
     const currentVehicle = vehicles.find(v => v.id === selectedVehicleId);
-    if (!currentVehicle) return;
+    if (!currentVehicle) {
+      alert("Sélectionnez d'abord un véhicule de votre flotte.");
+      return;
+    }
 
-    const newLog = {
-      id: `f-${Math.floor(100 + Math.random() * 900)}`,
-      date: fuelForm.date,
-      liters: Number(fuelForm.liters),
-      cost: Number(fuelForm.cost),
-      mileage: Number(fuelForm.mileage)
-    };
-
-    const existingLogs = currentVehicle.fuelLogs || [];
-    const updatedMileage = Number(fuelForm.mileage) > (currentVehicle.mileage || 0) 
-      ? Number(fuelForm.mileage) 
+    const enteredMileage = Number(fuelForm.mileage);
+    const updatedMileage = enteredMileage > (currentVehicle.mileage || 0)
+      ? enteredMileage
       : currentVehicle.mileage;
 
-    onUpdateVehicle(selectedVehicleId, {
-      fuelLogs: [...existingLogs, newLog],
-      mileage: updatedMileage
-    });
-
-    setFuelForm({
-      date: new Date().toISOString().split('T')[0],
-      liters: 45,
-      cost: 580,
-      mileage: updatedMileage ? updatedMileage + 500 : 45500
-    });
-    setShowAddFuelForm(false);
-    setSuccessMessage("Ravitaillement carburant enregistré avec succès !");
+    addFuelLogMutation.mutate(
+      {
+        vehicleId: currentVehicle.id,
+        log: {
+          date: fuelForm.date,
+          liters: Number(fuelForm.liters),
+          cost: Number(fuelForm.cost),
+          mileage: enteredMileage
+        }
+      },
+      {
+        onSuccess: () => {
+          // The odometer lives on the vehicle itself, so a fill-up that moves it forward
+          // is a second, separate write.
+          if (updatedMileage !== currentVehicle.mileage) {
+            onUpdateVehicle(currentVehicle.id, { mileage: updatedMileage });
+          }
+          setFuelForm({
+            date: new Date().toISOString().split('T')[0],
+            liters: 45,
+            cost: 580,
+            mileage: updatedMileage ? updatedMileage + 500 : 45500
+          });
+          setShowAddFuelForm(false);
+          setSuccessMessage("Ravitaillement carburant enregistré avec succès !");
+        }
+      }
+    );
   };
 
   const handleAddDriverSubmit = (e: React.FormEvent) => {
@@ -993,7 +1005,10 @@ export default function TransportHub({
 
   const handleSaveVehicleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!vehicleForm.brand || !vehicleForm.plate) return;
+    if (!vehicleForm.brand.trim() || !vehicleForm.model.trim() || !vehicleForm.plate.trim()) {
+      alert("La marque, le modèle et la plaque d'immatriculation sont obligatoires.");
+      return;
+    }
 
     if (isEditingVehicle && editingVehicleId) {
       onUpdateVehicle(editingVehicleId, vehicleForm);
@@ -1041,21 +1056,24 @@ export default function TransportHub({
   const handleAddPartner = (e: React.FormEvent) => {
     e.preventDefault();
     if (!partnerForm.name || !partnerForm.ice) return;
-    const newPartner = {
-      id: `p-${Math.floor(100 + Math.random() * 900)}`,
-      ...partnerForm
-    };
-    setPartners(prev => [...prev, newPartner]);
-    setPartnerForm({
-      name: '',
-      type: 'client',
-      ice: '',
-      phone: '',
-      email: '',
-      address: ''
+    const name = partnerForm.name;
+    addPartnerMutation.mutate(
+      { ...partnerForm },
+      {
+        onSuccess: () => {
+          setPartnerForm({ name: '', type: 'client', ice: '', phone: '', email: '', address: '' });
+          setShowAddPartnerForm(false);
+          setSuccessMessage(`Partenaire "${name}" enregistré avec succès !`);
+        }
+      }
+    );
+  };
+
+  const handleDeletePartner = (id: string) => {
+    if (!confirm("Voulez-vous vraiment supprimer ce partenaire de votre répertoire ?")) return;
+    deletePartnerMutation.mutate(id, {
+      onSuccess: () => setSuccessMessage("Partenaire supprimé de votre répertoire.")
     });
-    setShowAddPartnerForm(false);
-    setSuccessMessage(`Partenaire "${newPartner.name}" enregistré avec succès !`);
   };
 
   const handleAddTeamMember = (e: React.FormEvent) => {
@@ -1112,88 +1130,29 @@ export default function TransportHub({
     setSuccessMessage("Votre candidature à l'appel d'offre a été soumise avec succès !");
   };
 
-  const startPrivateChat = (item: typeof fellowEmptyReturns[0]) => {
-    const partner = item.transporterName;
-    setActivePrivateChatPartner(partner);
+  const startPrivateChat = (item: EmptyReturn) => {
+    setActivePrivateChatPartner({ id: item.transporterId, name: item.transporterName });
     setActiveTab('collab'); // Switch directly to Espace Confrères chat tab
-    
-    // If chat doesn't exist, initialize it
-    if (!privateChats[partner]) {
-      const autoMessage: ChatMessage = {
-        id: `pm-init-${Date.now()}`,
-        senderId: 'u-1',
-        senderName: currentUser.companyName || 'Atlas Trans Marrakech',
-        senderRole: 'transporter',
-        message: `Bonjour, je suis intéressé par votre retour à vide du ${new Date(item.dateTime).toLocaleDateString('fr-FR')} (${item.origin} → ${item.destination}) à ${item.price} DHS avec le véhicule ${item.vehicle}. Est-il disponible ?`,
-        timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-      };
-      
-      setPrivateChats(prev => ({
-        ...prev,
-        [partner]: [autoMessage]
-      }));
 
-      // Set a small delay for simulated realistic reply
-      setTimeout(() => {
-        const replyMessage: ChatMessage = {
-          id: `pm-reply-${Date.now()}`,
-          senderId: 'confrere',
-          senderName: partner,
-          senderRole: 'transporter',
-          message: `Salut ! Oui, ce retour à vide est bien disponible. Le véhicule est un ${item.vehicle} très propre. Voulez-vous qu'on s'arrange pour le bloquer ?`,
-          timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-        };
-        setPrivateChats(prev => ({
-          ...prev,
-          [partner]: [...(prev[partner] || []), replyMessage]
-        }));
-      }, 1500);
-    }
+    // Opening a thread posts the enquiry itself, so the peer has context when they reply.
+    const threadId = directThreadId(currentUser.id, item.transporterId);
+    sendThreadMessageMutation.mutate({
+      threadId,
+      message:
+        `Bonjour, je suis intéressé par votre retour à vide du ${new Date(item.dateTime).toLocaleDateString('fr-FR')} ` +
+        `(${item.origin} → ${item.destination}) à ${item.basePriceDHS} DHS en ${item.vehicleType}. Est-il toujours disponible ?`
+    });
   };
 
   const handleSendPrivateMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activePrivateChatPartner || !privateInput.trim()) return;
-    
-    const newMsg: ChatMessage = {
-      id: `pm-user-${Date.now()}`,
-      senderId: 'u-1',
-      senderName: currentUser.companyName || 'Atlas Trans Marrakech',
-      senderRole: 'transporter',
-      message: privateInput.trim(),
-      timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-    };
-    
-    const partner = activePrivateChatPartner;
-    setPrivateChats(prev => ({
-      ...prev,
-      [partner]: [...(prev[partner] || []), newMsg]
-    }));
-    setPrivateInput('');
-
-    // Simulate response
-    setTimeout(() => {
-      const answers = [
-        "Parfait, je transmets les coordonnées de mon chauffeur pour la coordination.",
-        "Entendu. Nous pouvons valider les conditions tarifaires par virement ou espèces.",
-        "Le véhicule est prêt et dispose de tous les agréments touristiques requis.",
-        "C'est noté ! Je bloque ce trajet pour vous. Merci pour la collaboration !"
-      ];
-      const randomAnswer = answers[Math.floor(Math.random() * answers.length)];
-      const partnerReply: ChatMessage = {
-        id: `pm-reply-${Date.now()}`,
-        senderId: 'confrere',
-        senderName: partner,
-        senderRole: 'transporter',
-        message: randomAnswer,
-        timestamp: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-      };
-      setPrivateChats(prev => ({
-        ...prev,
-        [partner]: [...(prev[partner] || []), partnerReply]
-      }));
-    }, 2000);
+    if (!privateThreadId || !privateInput.trim()) return;
+    sendThreadMessageMutation.mutate(
+      { threadId: privateThreadId, message: privateInput.trim() },
+      { onSuccess: () => setPrivateInput('') }
+    );
   };
+
 
   const handleVmsSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1201,17 +1160,16 @@ export default function TransportHub({
       alert("Veuillez sélectionner un chauffeur et un véhicule.");
       return;
     }
-    const newLiaison = {
-      id: `vms-${Math.floor(1000 + Math.random() * 9000)}`,
-      ...vmsForm
-    };
-    setVmsLiaisons(prev => [...prev, newLiaison]);
-    setSuccessMessage("Planning VMS enregistré avec succès !");
+    addVmsLiaisonMutation.mutate(
+      { ...vmsForm },
+      { onSuccess: () => setSuccessMessage("Planning VMS enregistré avec succès !") }
+    );
   };
 
   const handleDeleteVmsLiaison = (id: string) => {
-    setVmsLiaisons(prev => prev.filter(l => l.id !== id));
-    setSuccessMessage("Liaison VMS supprimée.");
+    deleteVmsLiaisonMutation.mutate(id, {
+      onSuccess: () => setSuccessMessage("Liaison VMS supprimée.")
+    });
   };
 
   const handleSaveLegalConfig = (e: React.FormEvent) => {
@@ -1231,41 +1189,47 @@ export default function TransportHub({
   const handleInvoiceGenerate = (e: React.FormEvent) => {
     e.preventDefault();
     const partner = partners.find(p => p.id === invoiceForm.partnerId) || partners[0];
-    
-    // Calculate values
-    const subtotal = invoiceItems.reduce((acc, item) => acc + (item.quantity * item.unitPrice), 0);
-    const tvaAmount = subtotal * (invoiceForm.tvaRate / 100);
-    const totalTtc = subtotal + tvaAmount;
+    if (!partner) {
+      alert("Ajoutez d'abord un client dans votre annuaire pour pouvoir émettre un document.");
+      return;
+    }
+    if (invoiceItems.length === 0) {
+      alert("Ajoutez au moins une ligne de prestation au document.");
+      return;
+    }
 
-    const prefix = invoiceForm.docType === 'Devis' ? 'DEV' :
-                   invoiceForm.docType === 'Facture' ? 'FACT' :
-                   invoiceForm.docType === 'Bon de commande' ? 'BC' : 'PRO';
-    const newDocId = `${prefix}-${Math.floor(10000 + Math.random() * 90000)}`;
-
-    const newDoc = {
-      id: newDocId,
-      date: new Date().toLocaleDateString('fr-FR'),
-      partner,
-      items: [...invoiceItems],
-      subtotal,
-      tvaAmount,
-      totalTtc,
-      status: 'created',
-      sharedWith: null,
-      ...invoiceForm
-    };
-
-    setGeneratedDoc(newDoc);
-    setInvoiceHistory(prev => [newDoc, ...prev]);
-    setSuccessMessage(`${invoiceForm.docType} généré avec succès !`);
+    // Totals and the document reference are computed by the backend so an issued document
+    // can never carry figures that don't add up.
+    createDocumentMutation.mutate(
+      {
+        docType: invoiceForm.docType,
+        partnerId: partner.id,
+        partnerName: partner.name,
+        partnerIce: partner.ice,
+        partnerPhone: partner.phone,
+        partnerEmail: partner.email,
+        partnerAddress: partner.address,
+        passengerName: invoiceForm.passengerName,
+        items: [...invoiceItems],
+        tvaRate: invoiceForm.tvaRate,
+        notes: invoiceForm.notes
+      },
+      {
+        onSuccess: (doc) => {
+          setGeneratedDoc(doc);
+          setSuccessMessage(`${doc.docType} ${doc.reference} généré et archivé avec succès !`);
+        }
+      }
+    );
   };
 
-  const handleDownloadDoc = (doc: any) => {
+  const handleDownloadDoc = (doc: BusinessDocument) => {
+    const issuedOn = new Date(doc.createdAt ?? Date.now()).toLocaleDateString('fr-FR');
     const content = `<!DOCTYPE html>
 <html>
   <head>
     <meta charset="utf-8">
-    <title>${doc.docType} - ${doc.id}</title>
+    <title>${doc.docType} - ${doc.reference}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <style>
@@ -1295,16 +1259,16 @@ export default function TransportHub({
         <div class="space-y-2">
           ${companyLogoUrl ? `<img src="${companyLogoUrl}" class="h-12 object-contain max-w-[220px]" />` : `<div class="h-12 w-12 bg-[#008060] text-white flex items-center justify-center font-extrabold rounded-lg text-lg">${currentUser.companyName?.substring(0, 2).toUpperCase() || 'TR'}</div>`}
           <div>
-            <p class="font-extrabold text-[#008060] uppercase tracking-wider text-sm">${currentUser.companyName || 'Atlas Trans Marrakech'}</p>
+            <p class="font-extrabold text-[#008060] uppercase tracking-wider text-sm">${currentUser.companyName || currentUser.name}</p>
             <p class="text-[10px] text-gray-500 font-medium">Prestataire de Transport National & Touristique Agréé</p>
           </div>
         </div>
         
         <div class="text-left text-[10px] text-gray-600 bg-gray-50 p-3 rounded-lg border border-gray-200 max-w-xs w-full sm:w-auto">
           <p class="font-bold text-gray-800 uppercase tracking-wider text-[9px] border-b border-gray-200 pb-1 mb-1.5">Identifiants Légaux Maroc</p>
-          <p class="font-semibold text-gray-900 font-mono">ICE : ${currentUser.ice || '001548796000085'}</p>
-          <p class="mt-0.5">Patente : <span class="font-mono">${currentUser.patente || '45879621'}</span> | RC : <span class="font-mono">${currentUser.rc || '98455-Marrakech'}</span></p>
-          <p class="mt-0.5">I.F. : <span class="font-mono">${currentUser.ifFiscal || '12457896'}</span> | CNSS : <span class="font-mono">${currentUser.cnss || '8547963'}</span></p>
+          <p class="font-semibold text-gray-900 font-mono">ICE : ${currentUser.ice || 'non renseigné'}</p>
+          <p class="mt-0.5">Patente : <span class="font-mono">${currentUser.patente || 'non renseignée'}</span> | RC : <span class="font-mono">${currentUser.rc || 'non renseigné'}</span></p>
+          <p class="mt-0.5">I.F. : <span class="font-mono">${currentUser.ifFiscal || 'non renseigné'}</span> | CNSS : <span class="font-mono">${currentUser.cnss || 'non renseigné'}</span></p>
         </div>
       </div>
 
@@ -1316,8 +1280,8 @@ export default function TransportHub({
         </div>
         <div class="text-right">
           <span class="text-[9px] font-bold text-gray-400 uppercase tracking-widest block">Numéro de Pièce</span>
-          <p class="font-mono font-extrabold text-gray-900 text-sm">${doc.id}</p>
-          <p class="text-[10px] text-gray-500 font-medium">Émis le ${doc.date}</p>
+          <p class="font-mono font-extrabold text-gray-900 text-sm">${doc.reference}</p>
+          <p class="text-[10px] text-gray-500 font-medium">Émis le ${issuedOn}</p>
         </div>
       </div>
 
@@ -1325,12 +1289,12 @@ export default function TransportHub({
       <div class="grid gap-4 sm:grid-cols-2">
         <div class="bg-gray-50 p-4 rounded-lg border border-gray-200 space-y-2">
           <span class="font-bold uppercase text-[9px] text-[#6D7175] block tracking-wider border-b border-gray-200 pb-1">CLIENT DESTINATAIRE</span>
-          <p class="font-bold text-gray-900 text-xs">${doc.partner?.name}</p>
+          <p class="font-bold text-gray-900 text-xs">${doc.partnerName}</p>
           <div class="text-[10px] text-gray-600 space-y-0.5">
-            <p>ICE : <span class="font-mono font-semibold">${doc.partner?.ice}</span></p>
-            <p>Tél : ${doc.partner?.phone}</p>
-            <p>Email : ${doc.partner?.email}</p>
-            <p>Adresse : ${doc.partner?.address}</p>
+            <p>ICE : <span class="font-mono font-semibold">${doc.partnerIce ?? '—'}</span></p>
+            <p>Tél : ${doc.partnerPhone ?? '—'}</p>
+            <p>Email : ${doc.partnerEmail ?? '—'}</p>
+            <p>Adresse : ${doc.partnerAddress ?? '—'}</p>
           </div>
         </div>
 
@@ -1394,7 +1358,7 @@ export default function TransportHub({
           <div class="border-2 border-dashed border-emerald-600/30 rounded-xl px-5 py-2.5 text-center transform -rotate-1 select-none bg-emerald-50/20">
             <p class="text-[8px] font-bold text-emerald-600 uppercase tracking-widest">Document Certifié</p>
             <p class="font-extrabold text-[#008060] text-sm mt-0.5 font-mono">CONFORME MUMY</p>
-            <p class="text-[7px] text-gray-400 mt-0.5 font-mono">ID: ${doc.id}</p>
+            <p class="text-[7px] text-gray-400 mt-0.5 font-mono">ID: ${doc.reference}</p>
           </div>
         </div>
       </div>
@@ -1406,27 +1370,24 @@ export default function TransportHub({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${doc.docType.replace(/\s+/g, '_')}_${doc.id}.html`;
+    a.download = `${doc.docType.replace(/\s+/g, '_')}_${doc.reference}.html`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
     URL.revokeObjectURL(url);
-    setSuccessMessage(`Document ${doc.docType} (${doc.id}) téléchargé en format HTML interactif. Vous pouvez l'ouvrir pour l'imprimer ou l'enregistrer en PDF !`);
+    setSuccessMessage(`Document ${doc.docType} (${doc.reference}) téléchargé en format HTML interactif. Vous pouvez l'ouvrir pour l'imprimer ou l'enregistrer en PDF !`);
   };
 
   const handleShareDoc = (docId: string, partnerName: string) => {
-    setInvoiceHistory(prev => prev.map(item => {
-      if (item.id === docId) {
-        return { ...item, status: 'shared', sharedWith: partnerName };
+    shareDocumentMutation.mutate(
+      { id: docId, sharedWith: partnerName },
+      {
+        onSuccess: (doc) => {
+          if (generatedDoc?.id === doc.id) setGeneratedDoc(doc);
+          setSuccessMessage(`Document ${doc.reference} partagé avec succès avec ${partnerName} par email et WhatsApp !`);
+        }
       }
-      return item;
-    }));
-    
-    if (generatedDoc && generatedDoc.id === docId) {
-      setGeneratedDoc(prev => ({ ...prev, status: 'shared', sharedWith: partnerName }));
-    }
-
-    setSuccessMessage(`Document ${docId} partagé avec succès avec ${partnerName} par email et WhatsApp !`);
+    );
   };
 
   const handleAddInvoiceItem = (e: React.FormEvent) => {
@@ -1464,6 +1425,57 @@ export default function TransportHub({
     }
     onUpdateCurrentUser(update);
     setSuccessMessage(`Document "${filename}" soumis pour vérification Admin !`);
+  };
+
+  // Was assigning straight onto the request prop (`req.attachments = [...]`), which React
+  // never persisted and the driver's PWA never saw. Now written through the API.
+  const handleAttachMissionDocs = (req: TransportRequest) => {
+    const today = new Date().toLocaleDateString('fr-FR');
+    updateRequestDetailsMutation.mutate(
+      {
+        requestId: req.id,
+        updated: {
+          attachments: [
+            { name: `Manifeste_Voyage_${req.id}.pdf`, url: '#manifest', type: 'manifest', date: today },
+            { name: `Facture_Prestation_${req.id}.pdf`, url: '#invoice', type: 'invoice', date: today }
+          ]
+        }
+      },
+      {
+        onSuccess: () =>
+          setSuccessMessage(
+            "Manifeste officiel et Facture commerciale liés à la mission ! Le chauffeur assigné peut les consulter sur sa console PWA."
+          )
+      }
+    );
+  };
+
+  const handleAddLeadSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newLeadForm.clientName || !newLeadForm.passengerName || !newLeadForm.dateTime) {
+      alert("Le client, le passager et la date de la mission sont obligatoires.");
+      return;
+    }
+
+    createDirectLeadMutation.mutate(
+      {
+        clientName: newLeadForm.clientName,
+        passengerName: newLeadForm.passengerName,
+        origin: newLeadForm.origin,
+        destination: newLeadForm.destination,
+        dateTime: newLeadForm.dateTime,
+        paxCount: Number(newLeadForm.paxCount),
+        serviceType: newLeadForm.serviceType,
+        daysCount: newLeadForm.serviceType === 'disposal' ? Number(newLeadForm.daysCount) : undefined,
+        status: newLeadForm.status
+      },
+      {
+        onSuccess: () => {
+          setShowAddLeadForm(false);
+          setSuccessMessage(`Lead direct "${newLeadForm.clientName}" enregistré dans votre CRM !`);
+        }
+      }
+    );
   };
 
   const handleReturnSubmit = (e: React.FormEvent) => {
@@ -1659,6 +1671,170 @@ export default function TransportHub({
           >
             OK
           </button>
+        </div>
+      )}
+
+      {/* NOUVEAU LEAD DIRECT — the "Nouveau Lead Direct" button in the CRM toolbar flipped
+          `showAddLeadForm` but no form was ever rendered for it, so the button did nothing.
+          A direct lead is a booking taken off-platform: it belongs to this transporter from
+          the moment it is created, with no Mumy client account behind it. */}
+      {showAddLeadForm && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 py-10">
+          <form
+            onSubmit={handleAddLeadSubmit}
+            className="w-full max-w-2xl space-y-4 rounded-2xl border border-[#E1E3E5] bg-white p-5 shadow-2xl animate-fade-in"
+          >
+            <div className="flex items-start justify-between gap-4 border-b border-[#E1E3E5] pb-3">
+              <div>
+                <h3 className="flex items-center gap-1.5 text-sm font-black text-[#1A1A1A]">
+                  <PlusCircle className="h-4 w-4 text-[#008060]" />
+                  Nouveau Lead Direct
+                </h3>
+                <p className="mt-1 text-[11px] font-medium text-[#6D7175]">
+                  Enregistrez une réservation obtenue hors plateforme (téléphone, agence partenaire, client direct).
+                  Elle rejoint votre pipeline CRM et votre planning.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddLeadForm(false)}
+                className="shrink-0 rounded-lg border border-[#E1E3E5] px-2.5 py-1 text-xs font-bold text-[#6D7175] transition hover:bg-gray-50 cursor-pointer"
+              >
+                Annuler
+              </button>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Client / Société *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newLeadForm.clientName}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, clientName: e.target.value })}
+                  placeholder="Ex : Riad Royal Marrakech"
+                  className="w-full rounded-lg border border-[#E1E3E5] p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Passager *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={newLeadForm.passengerName}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, passengerName: e.target.value })}
+                  placeholder="Ex : M. Jean Dupont"
+                  className="w-full rounded-lg border border-[#E1E3E5] p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Départ
+                </label>
+                <input
+                  type="text"
+                  value={newLeadForm.origin}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, origin: e.target.value })}
+                  className="w-full rounded-lg border border-[#E1E3E5] p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Destination
+                </label>
+                <input
+                  type="text"
+                  value={newLeadForm.destination}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, destination: e.target.value })}
+                  className="w-full rounded-lg border border-[#E1E3E5] p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Date & heure *
+                </label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={newLeadForm.dateTime}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, dateTime: e.target.value })}
+                  className="w-full rounded-lg border border-[#E1E3E5] p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Passagers
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={newLeadForm.paxCount}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, paxCount: Number(e.target.value) })}
+                  className="w-full rounded-lg border border-[#E1E3E5] p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Type de service
+                </label>
+                <select
+                  value={newLeadForm.serviceType}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, serviceType: e.target.value as typeof newLeadForm.serviceType })}
+                  className="w-full rounded-lg border border-[#E1E3E5] bg-white p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                >
+                  <option value="simple">Transfert simple</option>
+                  <option value="round_trip">Aller-retour</option>
+                  <option value="disposal">Mise à disposition</option>
+                </select>
+              </div>
+              {newLeadForm.serviceType === 'disposal' && (
+                <div>
+                  <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                    Nombre de jours
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    value={newLeadForm.daysCount}
+                    onChange={(e) => setNewLeadForm({ ...newLeadForm, daysCount: Number(e.target.value) })}
+                    className="w-full rounded-lg border border-[#E1E3E5] p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                  />
+                </div>
+              )}
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-[#6D7175]">
+                  Statut initial
+                </label>
+                <select
+                  value={newLeadForm.status}
+                  onChange={(e) => setNewLeadForm({ ...newLeadForm, status: e.target.value as typeof newLeadForm.status })}
+                  className="w-full rounded-lg border border-[#E1E3E5] bg-white p-2 text-xs focus:border-[#008060] focus:outline-none focus:ring-1 focus:ring-[#008060]"
+                >
+                  <option value="accepted">Confirmée</option>
+                  <option value="pending">À confirmer</option>
+                  <option value="en_route">Chauffeur en route</option>
+                  <option value="completed">Terminée</option>
+                </select>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={createDirectLeadMutation.isPending}
+              className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-[#008060] px-4 py-2.5 text-xs font-black text-white shadow-xs transition hover:bg-[#006e52] disabled:cursor-not-allowed disabled:opacity-60 cursor-pointer"
+            >
+              {createDirectLeadMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <PlusCircle className="h-4 w-4" />
+              )}
+              Enregistrer le lead dans le CRM
+            </button>
+          </form>
         </div>
       )}
 
@@ -3275,6 +3451,24 @@ export default function TransportHub({
               ) : (
                 /* CONNECTED VIEW SHOWING MAP & ACTUAL SYNCHRONIZATION */
                 <div className="space-y-6 animate-fade-in">
+                  {/* Mumy has no telematics backend yet: the positions, speeds and fuel
+                      levels below are generated in the browser. Saying so plainly beats
+                      letting a dispatcher route a real vehicle from invented coordinates. */}
+                  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3.5 flex items-start gap-2.5">
+                    <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="text-left">
+                      <p className="text-[11px] font-black uppercase tracking-wider text-amber-800">
+                        Démonstration — positions non réelles
+                      </p>
+                      <p className="mt-0.5 text-[10.5px] font-medium leading-relaxed text-amber-900">
+                        Le connecteur télématique n'est pas encore branché sur un fournisseur.
+                        Les positions, vitesses et niveaux de carburant affichés ici sont générés
+                        localement à des fins de démonstration : ne les utilisez pas pour piloter
+                        vos rotations.
+                      </p>
+                    </div>
+                  </div>
+
                   {/* Connected Header Banner */}
                   <div className="bg-emerald-50 border border-[#BBE3D1] rounded-2xl p-4 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-3xs text-left">
                     <div className="flex items-center gap-3">
@@ -4337,15 +4531,7 @@ export default function TransportHub({
                         </span>
                         <button
                           type="button"
-                          onClick={() => {
-                            req.attachments = [
-                              { name: "Manifeste_Voyage_" + req.id + ".pdf", url: "#manifest", type: "manifest", date: new Date().toLocaleDateString('fr-FR') },
-                              { name: "Facture_Prestation_" + req.id + ".pdf", url: "#invoice", type: "invoice", date: new Date().toLocaleDateString('fr-FR') }
-                            ];
-                            // Trick React to force re-render
-                            setUploadedManifestName("Manifeste_Voyage_" + req.id + ".pdf");
-                            alert("Manifeste officiel et Facture commerciale liés avec succès à la mission ! Le chauffeur Ahmed est notifié et peut les consulter en temps réel sur sa console PWA.");
-                          }}
+                          onClick={() => handleAttachMissionDocs(req)}
                           className="bg-emerald-50 border border-emerald-250 text-[#008060] hover:bg-emerald-100/60 px-2 py-1 rounded-md text-[10px] font-black flex items-center gap-1 cursor-pointer transition-colors"
                         >
                           ➕ Lier Manifeste & Facture PDF
@@ -5243,13 +5429,28 @@ export default function TransportHub({
                         <p className="text-[10px] text-[#6D7175] mt-0.5 font-medium font-mono">ICE: {p.ice}</p>
                         <p className="text-[9px] text-[#6D7175] font-medium">{p.phone} • {p.email}</p>
                       </div>
-                      <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase ${
-                        p.type === 'client' ? 'bg-[#EBF5F1] text-[#008060] border border-[#BBE3D1]' : 'bg-blue-50 text-blue-700 border border-blue-200'
-                      }`}>
-                        {p.type === 'client' ? 'Client' : 'Frn'}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase ${
+                          p.type === 'client' ? 'bg-[#EBF5F1] text-[#008060] border border-[#BBE3D1]' : 'bg-blue-50 text-blue-700 border border-blue-200'
+                        }`}>
+                          {p.type === 'client' ? 'Client' : 'Frn'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePartner(p.id)}
+                          className="rounded p-1 text-gray-400 transition hover:bg-red-50 hover:text-red-600 cursor-pointer"
+                          title="Supprimer du répertoire"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))}
+                  {partners.length === 0 && (
+                    <p className="py-4 text-center text-[11px] italic text-gray-400">
+                      Votre répertoire est vide. Ajoutez vos clients et fournisseurs pour pouvoir émettre des devis et factures.
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
@@ -5349,7 +5550,7 @@ export default function TransportHub({
                       <label className="block text-[10px] font-bold text-[#6D7175] uppercase tracking-wider">Type de document</label>
                       <select
                         value={invoiceForm.docType}
-                        onChange={(e) => setInvoiceForm({...invoiceForm, docType: e.target.value as any})}
+                        onChange={(e) => setInvoiceForm({...invoiceForm, docType: e.target.value as BusinessDocument['docType']})}
                         className="mt-1 w-full rounded-lg border border-[#E1E3E5] p-2 text-xs text-[#1A1A1A] bg-white focus:outline-none focus:border-[#008060]"
                       >
                         <option value="Devis">Devis Commercial</option>
@@ -5515,7 +5716,7 @@ export default function TransportHub({
                             </div>
                           )}
                           <div>
-                            <p className="font-extrabold text-[#008060] uppercase tracking-wider text-sm">{currentUser.companyName || 'Atlas Trans Marrakech'}</p>
+                            <p className="font-extrabold text-[#008060] uppercase tracking-wider text-sm">{currentUser.companyName || currentUser.name}</p>
                             <p className="text-[10px] text-gray-500 font-medium">Prestataire de Transport National & Touristique Agréé</p>
                           </div>
                         </div>
@@ -5523,9 +5724,14 @@ export default function TransportHub({
                         {/* Professional Legal Coordinates */}
                         <div className="text-right text-[10px] text-gray-600 bg-gray-50 p-3 rounded-lg border border-[#E1E3E5] max-w-full sm:max-w-[280px]">
                           <p className="font-bold text-gray-800 uppercase tracking-wider text-[9px] border-b border-gray-200 pb-1 mb-1.5">Identifiants Légaux Maroc</p>
-                          <p className="font-semibold text-gray-900">ICE : <span className="font-mono text-[#008060]">{currentUser.ice || '001548796000085'}</span></p>
-                          <p className="mt-0.5">Patente : <span className="font-mono">{currentUser.patente || '45879621'}</span> | RC : <span className="font-mono">{currentUser.rc || '98455-Marrakech'}</span></p>
-                          <p className="mt-0.5">I.F. : <span className="font-mono">{currentUser.ifFiscal || '12457896'}</span> | CNSS : <span className="font-mono">{currentUser.cnss || '8547963'}</span></p>
+                          <p className="font-semibold text-gray-900">ICE : <span className="font-mono text-[#008060]">{currentUser.ice || 'non renseigné'}</span></p>
+                          <p className="mt-0.5">Patente : <span className="font-mono">{currentUser.patente || 'non renseignée'}</span> | RC : <span className="font-mono">{currentUser.rc || 'non renseigné'}</span></p>
+                          <p className="mt-0.5">I.F. : <span className="font-mono">{currentUser.ifFiscal || 'non renseigné'}</span> | CNSS : <span className="font-mono">{currentUser.cnss || 'non renseigné'}</span></p>
+                          {!currentUser.ice && (
+                            <p className="mt-1.5 text-[9px] font-bold text-amber-700">
+                              ⚠️ Complétez vos identifiants légaux (onglet Configuration) avant d'émettre ce document.
+                            </p>
+                          )}
                         </div>
                       </div>
 
@@ -5537,8 +5743,10 @@ export default function TransportHub({
                         </div>
                         <div className="text-right">
                           <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest block">Numéro de Pièce</span>
-                          <p className="font-mono font-extrabold text-gray-900 text-sm">{generatedDoc.id}</p>
-                          <p className="text-[10px] text-gray-500 font-medium">Émis le {generatedDoc.date}</p>
+                          <p className="font-mono font-extrabold text-gray-900 text-sm">{generatedDoc.reference}</p>
+                          <p className="text-[10px] text-gray-500 font-medium">
+                            Émis le {new Date(generatedDoc.createdAt ?? Date.now()).toLocaleDateString('fr-FR')}
+                          </p>
                         </div>
                       </div>
 
@@ -5546,12 +5754,12 @@ export default function TransportHub({
                       <div className="grid gap-4 sm:grid-cols-2">
                         <div className="bg-gray-50 p-3.5 rounded-lg border border-[#E1E3E5] space-y-2">
                           <span className="font-bold uppercase text-[9px] text-[#6D7175] block tracking-wider border-b border-[#E1E3E5] pb-1">CLIENT DESTINATAIRE</span>
-                          <p className="font-bold text-[#1A1A1A] text-xs">{generatedDoc.partner?.name}</p>
+                          <p className="font-bold text-[#1A1A1A] text-xs">{generatedDoc.partnerName}</p>
                           <div className="text-[10px] text-gray-600 space-y-0.5">
-                            <p>ICE : <span className="font-mono font-semibold">{generatedDoc.partner?.ice}</span></p>
-                            <p>Tél : {generatedDoc.partner?.phone}</p>
-                            <p>Email : {generatedDoc.partner?.email}</p>
-                            <p>Adresse : {generatedDoc.partner?.address}</p>
+                            <p>ICE : <span className="font-mono font-semibold">{generatedDoc.partnerIce || '—'}</span></p>
+                            <p>Tél : {generatedDoc.partnerPhone || '—'}</p>
+                            <p>Email : {generatedDoc.partnerEmail || '—'}</p>
+                            <p>Adresse : {generatedDoc.partnerAddress || '—'}</p>
                           </div>
                         </div>
 
@@ -5615,7 +5823,7 @@ export default function TransportHub({
                           <div className="border-2 border-dashed border-emerald-600/30 rounded-xl px-5 py-2.5 text-center transform -rotate-1 select-none bg-emerald-50/20">
                             <p className="text-[8px] font-bold text-emerald-600 uppercase tracking-widest">Document Certifié</p>
                             <p className="font-extrabold text-[#008060] text-sm mt-0.5 font-mono">CONFORME MUMY</p>
-                            <p className="text-[7px] text-gray-400 mt-0.5 font-mono">ID: {generatedDoc.id}</p>
+                            <p className="text-[7px] text-gray-400 mt-0.5 font-mono">ID: {generatedDoc.reference}</p>
                           </div>
                         </div>
                       </div>
@@ -5686,8 +5894,10 @@ export default function TransportHub({
                       {invoiceHistory.map((doc) => (
                         <tr key={doc.id} className="hover:bg-gray-50 transition">
                           <td className="p-3">
-                            <p className="font-mono font-bold text-[#008060]">{doc.id}</p>
-                            <p className="text-[10px] text-[#6D7175]">{doc.date}</p>
+                            <p className="font-mono font-bold text-[#008060]">{doc.reference}</p>
+                            <p className="text-[10px] text-[#6D7175]">
+                              {new Date(doc.createdAt ?? Date.now()).toLocaleDateString('fr-FR')}
+                            </p>
                           </td>
                           <td className="p-3 font-semibold">
                             <span className={`px-2 py-0.5 rounded text-[10px] ${
@@ -5699,7 +5909,7 @@ export default function TransportHub({
                               {doc.docType}
                             </span>
                           </td>
-                          <td className="p-3 font-medium">{doc.partner?.name || doc.passengerName}</td>
+                          <td className="p-3 font-medium">{doc.partnerName || doc.passengerName}</td>
                           <td className="p-3 font-mono font-bold">{doc.totalTtc} DHS</td>
                           <td className="p-3">
                             {doc.status === 'shared' ? (
@@ -5725,8 +5935,8 @@ export default function TransportHub({
                               <button
                                 type="button"
                                 onClick={() => {
-                                  const rec = doc.partner?.name || partners[0]?.name;
-                                  handleShareDoc(doc.id, rec);
+                                  const rec = doc.partnerName || partners[0]?.name;
+                                  if (rec) handleShareDoc(doc.id, rec);
                                 }}
                                 className="p-1.5 rounded text-blue-600 hover:bg-blue-50"
                                 title="Partager"
@@ -6020,6 +6230,11 @@ export default function TransportHub({
                 <p className="text-[10.5px] text-[#6D7175] mt-0.5 font-medium">Trajets à vide publiés par d'autres sociétés. Entamez une négociation privée instantanée.</p>
               </div>
               <div className="space-y-3">
+                {fellowEmptyReturns.length === 0 && (
+                  <p className="py-6 text-center text-[11px] italic text-gray-400">
+                    Aucun confrère n'a publié de retour à vide pour le moment.
+                  </p>
+                )}
                 {fellowEmptyReturns.map(item => (
                   <div key={item.id} className="rounded-lg border border-emerald-100 p-4 bg-emerald-50/20 text-xs hover:bg-emerald-50/50 transition-all duration-200">
                     <div className="flex justify-between items-center mb-2">
@@ -6029,13 +6244,13 @@ export default function TransportHub({
                       </span>
                     </div>
                     <p className="text-gray-600 text-[10px] font-medium mb-1">Confrère : <span className="font-bold text-[#008060]">{item.transporterName}</span></p>
-                    <p className="text-gray-500 text-[10px] mb-1">Véhicule : {item.vehicle}</p>
+                    <p className="text-gray-500 text-[10px] mb-1">Véhicule : {item.vehicleType}</p>
                     <p className="text-gray-500 text-[10px] mb-3">Départ : {new Date(item.dateTime).toLocaleString('fr-FR')}</p>
-                    
+
                     <div className="border-t border-emerald-100/60 pt-2 flex justify-between items-center">
                       <div>
                         <span className="text-[9px] text-[#6D7175] block uppercase tracking-wider">Tarif Proposé</span>
-                        <span className="font-mono font-bold text-sm text-[#008060]">{item.price} DHS</span>
+                        <span className="font-mono font-bold text-sm text-[#008060]">{item.basePriceDHS} DHS</span>
                       </div>
                       <button
                         onClick={() => startPrivateChat(item)}
@@ -6090,33 +6305,31 @@ export default function TransportHub({
                   </div>
                 </button>
 
-                {/* Private Chats */}
-                {Object.keys(privateChats).map(partner => {
-                  const lastMsg = privateChats[partner]?.[privateChats[partner].length - 1];
-                  return (
-                    <button
-                      key={partner}
-                      onClick={() => setActivePrivateChatPartner(partner)}
-                      className={`w-full text-left p-3 flex items-center gap-2.5 transition-all focus:outline-none ${
-                        activePrivateChatPartner === partner ? 'bg-emerald-50/60 border-l-4 border-[#008060]' : 'hover:bg-gray-50'
-                      }`}
-                    >
-                      <div className="relative shrink-0">
-                        <div className="rounded-full bg-[#1A1A1A]/10 p-2 text-[#1A1A1A] font-bold text-xs h-8 w-8 flex items-center justify-center">
-                          {partner.charAt(0)}
-                        </div>
-                        <span className="absolute bottom-0 right-0 block h-2 w-2 rounded-full bg-emerald-500 ring-2 ring-white"></span>
+                {/* Open private thread. Threads are opened from a confrère's empty return
+                    ("Discuter Privément"), so at most one is active at a time here. */}
+                {activePrivateChatPartner && (
+                  <button
+                    onClick={() => setActivePrivateChatPartner(activePrivateChatPartner)}
+                    className="w-full text-left p-3 flex items-center gap-2.5 transition-all focus:outline-none bg-emerald-50/60 border-l-4 border-[#008060]"
+                  >
+                    <div className="relative shrink-0">
+                      <div className="rounded-full bg-[#1A1A1A]/10 p-2 text-[#1A1A1A] font-bold text-xs h-8 w-8 flex items-center justify-center">
+                        {activePrivateChatPartner.name.charAt(0)}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex justify-between items-center">
-                          <strong className="text-xs text-[#1A1A1A] truncate font-bold">{partner}</strong>
-                          <span className="text-[8px] text-gray-400 font-mono">{lastMsg?.timestamp || 'En ligne'}</span>
-                        </div>
-                        <p className="text-[10px] text-gray-500 truncate mt-0.5">{lastMsg?.message || 'Pas de message'}</p>
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex justify-between items-center">
+                        <strong className="text-xs text-[#1A1A1A] truncate font-bold">{activePrivateChatPartner.name}</strong>
+                        <span className="text-[8px] text-gray-400 font-mono">
+                          {privateMessages[privateMessages.length - 1]?.timestamp || ''}
+                        </span>
                       </div>
-                    </button>
-                  );
-                })}
+                      <p className="text-[10px] text-gray-500 truncate mt-0.5">
+                        {privateMessages[privateMessages.length - 1]?.message || 'Pas encore de message'}
+                      </p>
+                    </div>
+                  </button>
+                )}
               </div>
             </div>
 
@@ -6127,7 +6340,7 @@ export default function TransportHub({
                 <div className="flex items-center gap-2">
                   <div className={`h-2.5 w-2.5 rounded-full ${activePrivateChatPartner ? 'bg-emerald-500 animate-pulse' : 'bg-emerald-400'}`}></div>
                   <h4 className="text-xs font-bold text-[#1A1A1A]">
-                    {activePrivateChatPartner ? `Négociation avec ${activePrivateChatPartner}` : 'Forum Général (Inter-Transporteurs)'}
+                    {activePrivateChatPartner ? `Négociation avec ${activePrivateChatPartner.name}` : 'Forum Général (Inter-Transporteurs)'}
                   </h4>
                 </div>
                 <span className="text-[9px] bg-emerald-100 text-[#008060] font-extrabold uppercase tracking-widest px-2 py-0.5 rounded">
@@ -6155,8 +6368,8 @@ export default function TransportHub({
                   ))
                 ) : (
                   /* Private Chat Messages with Left/Right Alignment */
-                  (privateChats[activePrivateChatPartner] || []).map(msg => {
-                    const isCurrentUser = msg.senderId === 'u-1';
+                  privateMessages.map(msg => {
+                    const isCurrentUser = msg.senderId === currentUser.id;
                     return (
                       <div key={msg.id} className={`flex flex-col ${isCurrentUser ? 'items-end' : 'items-start'} text-xs`}>
                         <div className="flex items-center gap-1.5 text-gray-400 text-[9px] mb-0.5">
@@ -6350,7 +6563,7 @@ export default function TransportHub({
               <div className="bg-white rounded-xl border border-[#E1E3E5] p-5 shadow-2xs text-left">
                 <div className="flex justify-between items-center border-b border-[#E1E3E5] pb-3 mb-4">
                   <h4 className="text-xs font-bold text-[#1A1A1A] uppercase tracking-wider flex items-center gap-1.5">
-                    🏢 Membres de l'Agence Atlas Trans Marrakech ({partnerTeam.length})
+                    🏢 Membres de l'Agence {currentUser.companyName || currentUser.name} ({partnerTeam.length})
                   </h4>
                   <span className="text-[10px] text-[#6D7175] font-semibold">Dernière mise à jour: Aujourd'hui</span>
                 </div>

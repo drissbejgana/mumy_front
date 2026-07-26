@@ -6,7 +6,8 @@ import {
 } from "lucide-react";
 import { TransportRequest, Driver, AdBanner } from "../types";
 import SimulationAdBanner from "./SimulationAdBanner";
-import { useMyDriver } from "../hooks/useDrivers";
+import { useMyDriver, useUpdateMyDriverStatus } from "../hooks/useDrivers";
+import { useUpdateRequestDetails } from "../hooks/useRequests";
 
 interface DriverHubProps {
   requests: TransportRequest[];
@@ -27,9 +28,15 @@ export default function DriverHub({
 }: DriverHubProps) {
   // Resolves the logged-in driver's own record via the JWT-linked account, not a hardcoded id.
   const { data: currentDriver } = useMyDriver();
-  
-  // Find requests assigned to this driver
-  const assignedRequests = requests.filter(r => r.assignedDriverId === 'd-1');
+  const updateMyStatusMutation = useUpdateMyDriverStatus();
+  const updateRequestDetailsMutation = useUpdateRequestDetails();
+
+  // Find requests assigned to this driver. This used to compare against the mock id 'd-1',
+  // which matches no real Driver document — so the mission list was always empty in
+  // production and only ever worked against the original in-memory fixtures.
+  const assignedRequests = currentDriver
+    ? requests.filter(r => r.assignedDriverId === currentDriver.id)
+    : [];
 
   // Copy state
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -37,9 +44,12 @@ export default function DriverHub({
   // Bottom Nav states: 'trips' | 'chat' | 'profile'
   const [activeTab, setActiveTab] = useState<'trips' | 'chat' | 'profile'>('trips');
 
-  // Online / Offline Status
-  const [isOnline, setIsOnline] = useState<boolean>(true);
-  const [lastSeenTime, setLastSeenTime] = useState<string>("À l'instant");
+  // Online / Offline status, mirrored from the driver's own record so it survives a reload
+  // and the dispatcher actually sees it (it used to be component state only).
+  const isOnline = currentDriver?.isOnline ?? false;
+  const lastSeenTime = currentDriver?.lastSeen
+    ? new Date(currentDriver.lastSeen).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+    : "À l'instant";
 
   // Document preview modal states
   const [previewDoc, setPreviewDoc] = useState<{ type: 'manifest' | 'invoice'; reqId: string } | null>(null);
@@ -48,12 +58,9 @@ export default function DriverHub({
   const [signingReqId, setSigningReqId] = useState<string | null>(null);
   const [sigName, setSigName] = useState<string>("");
 
-  // Chat Messenger states
-  const [messages, setMessages] = useState<Array<{ sender: 'driver' | 'dispatcher'; text: string; time: string }>>([
-    { sender: 'dispatcher', text: "Ahmed, le client du Riad El Fenn est-il bien à bord ?", time: "12:30" },
-    { sender: 'driver', text: "Oui, nous venons de quitter le Riad, en route pour Bab Doukkala.", time: "12:32" },
-    { sender: 'dispatcher', text: "Parfait, pensez à faire signer le bon de livraison (POD) sur l'application lors du dépôt.", time: "12:33" }
-  ]);
+  // Chat Messenger states. The thread used to open with three invented messages naming a
+  // passenger and a pickup that never happened.
+  const [messages, setMessages] = useState<Array<{ sender: 'driver' | 'dispatcher'; text: string; time: string }>>([]);
   const [newMessage, setNewMessage] = useState<string>("");
   const [isTyping, setIsTyping] = useState<boolean>(false);
 
@@ -72,6 +79,26 @@ export default function DriverHub({
     }
     setCopiedId(reqId);
     setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  // Proof of delivery. This used to assign straight onto the request prop
+  // (`req.podSignature = sigName`), which React discarded on the next refetch and the
+  // transport office never received. It is now written through the API.
+  const handleSignPod = (requestId: string) => {
+    if (!sigName.trim()) {
+      alert("Veuillez saisir le nom ou les initiales du client pour signer.");
+      return;
+    }
+    updateRequestDetailsMutation.mutate(
+      { requestId, updated: { podSignature: sigName.trim() } },
+      {
+        onSuccess: () => {
+          setSigningReqId(null);
+          setSigName("");
+          alert("Signature client (POD) enregistrée et envoyée au bureau de transport !");
+        }
+      }
+    );
   };
 
   // Chat message sending & dispatcher smart auto-response simulator
@@ -136,21 +163,19 @@ export default function DriverHub({
                 />
                 <div>
                   <h4 className="text-xs font-black leading-none flex items-center gap-1">
-                    {currentDriver?.name || "Ahmed El Mansouri"}
+                    {currentDriver?.name ?? 'Profil chauffeur'}
                     <Award className="h-3 w-3 text-amber-300" />
                   </h4>
-                  <span className="text-[8.5px] text-emerald-100 font-semibold uppercase tracking-wider block mt-0.5">Atlas Trans • Chauffeur Officiel</span>
+                  <span className="text-[8.5px] text-emerald-100 font-semibold uppercase tracking-wider block mt-0.5">Chauffeur Officiel Mumy</span>
                 </div>
               </div>
 
               {/* Status Sync Button */}
               <button
                 type="button"
-                onClick={() => {
-                  setIsOnline(!isOnline);
-                  setLastSeenTime(!isOnline ? "À l'instant" : new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }));
-                }}
-                className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider transition-colors flex items-center gap-1 ${
+                onClick={() => updateMyStatusMutation.mutate(!isOnline)}
+                disabled={!currentDriver || updateMyStatusMutation.isPending}
+                className={`px-2 py-1 rounded text-[8px] font-black uppercase tracking-wider transition-colors flex items-center gap-1 disabled:opacity-60 ${
                   isOnline 
                     ? "bg-emerald-900/40 text-emerald-100 hover:bg-emerald-900/60" 
                     : "bg-red-900/50 text-red-100 hover:bg-red-900/70"
@@ -293,17 +318,9 @@ export default function DriverHub({
                                 />
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    if (!sigName.trim()) {
-                                      alert("Veuillez saisir le nom ou les initiales du client pour signer.");
-                                      return;
-                                    }
-                                    req.podSignature = sigName;
-                                    setSigningReqId(null);
-                                    setSigName("");
-                                    alert("Signature client (POD) enregistrée et envoyée au bureau de transport !");
-                                  }}
-                                  className="bg-[#008060] text-white hover:bg-[#006e52] px-2.5 py-1 text-[10px] font-black rounded-lg transition-all"
+                                  onClick={() => handleSignPod(req.id)}
+                                  disabled={updateRequestDetailsMutation.isPending}
+                                  className="bg-[#008060] text-white hover:bg-[#006e52] px-2.5 py-1 text-[10px] font-black rounded-lg transition-all disabled:opacity-60"
                                 >
                                   Valider POD
                                 </button>
@@ -544,13 +561,13 @@ export default function DriverHub({
                   <div className="space-y-2 font-mono text-[9.5px] bg-slate-50 p-3 rounded-xl border border-gray-200">
                     <p className="border-b border-gray-200 pb-1 text-slate-400 text-[8px] font-black tracking-widest">MUMY TRANSPORT LOGISTICS MOROCCO</p>
                     <p><strong className="text-gray-700">Course Réf :</strong> {req.id}</p>
-                    <p><strong className="text-gray-700">Chauffeur :</strong> Ahmed El Mansouri</p>
+                    <p><strong className="text-gray-700">Chauffeur :</strong> {currentDriver?.name ?? '—'}</p>
                     <p><strong className="text-gray-700">Départ :</strong> {req.origin}</p>
                     <p><strong className="text-gray-700">Destination :</strong> {req.destination}</p>
                     <p><strong className="text-gray-700">Passagers :</strong> {req.paxCount} pax ({req.passengerName})</p>
                     {previewDoc.type === 'invoice' && (
                       <p className="text-emerald-700 font-bold border-t border-dashed border-gray-300 pt-1 mt-1">
-                        TARIF TOTAL : {req.priceDHS || 450} DHS (Règlement b2b)
+                        TARIF TOTAL : {req.priceDHS ? `${req.priceDHS} DHS` : 'à confirmer'} (Règlement b2b)
                       </p>
                     )}
                     <p className="text-slate-400 text-[8.5px] italic pt-1 text-center font-sans">

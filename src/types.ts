@@ -28,6 +28,9 @@ export interface User {
   kycPatenteUrl?: string;
   kycPatenteStatus?: 'missing' | 'pending' | 'verified' | 'rejected';
   kycRejectReason?: string;
+  bankName?: string;
+  rib?: string;
+  bankKycStatus?: 'pending' | 'verified' | 'rejected';
   errorCount?: number;
   riskErrors?: Array<{ id: string; type: string; date: string; description: string; resolved: boolean }>;
   lastLoginAt?: string;
@@ -273,6 +276,50 @@ export interface ExcursionBooking {
   totalPriceDHS: number;
   status: 'pending' | 'confirmed' | 'cancelled';
   createdAt: string;
+}
+
+// One driver/vehicle shift in a transporter's weekly VMS planning grid.
+export interface VmsLiaison {
+  id: string;
+  transporterId?: string;
+  driverId: string;
+  vehicleId: string;
+  dayOfWeek: 'Lundi' | 'Mardi' | 'Mercredi' | 'Jeudi' | 'Vendredi' | 'Samedi' | 'Dimanche';
+  shift: 'morning' | 'afternoon' | 'night' | 'full_day';
+  startTime: string;
+  endTime: string;
+  date: string;
+  notes?: string;
+}
+
+export interface BusinessDocumentItem {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+// A commercial document issued by a transporter (devis, facture, bon de commande…).
+export interface BusinessDocument {
+  id: string;
+  transporterId?: string;
+  reference: string;
+  docType: 'Devis' | 'Facture' | 'Bon de commande' | 'Facture Proforma';
+  partnerId?: string | null;
+  partnerName: string;
+  partnerIce?: string;
+  partnerPhone?: string;
+  partnerEmail?: string;
+  partnerAddress?: string;
+  passengerName?: string;
+  items: BusinessDocumentItem[];
+  tvaRate: number;
+  subtotal: number;
+  tvaAmount: number;
+  totalTtc: number;
+  notes?: string;
+  status: 'created' | 'shared' | 'paid' | 'cancelled';
+  sharedWith?: string | null;
+  createdAt?: string;
 }
 
 export interface SupportMessage {

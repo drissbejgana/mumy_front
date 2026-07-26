@@ -5,13 +5,16 @@ import {
   AlertTriangle, MessageSquare, Megaphone, MousePointerClick, Eye, TrendingUp, Plus, Coins,
   CreditCard, Calendar, Sliders, Search, FileDown, Settings
 } from "lucide-react";
-import { User, TeamMember, SentimentAlert, Driver, AdBanner, Excursion, ExcursionBooking, SupportSession } from "../types";
+import { User, TeamMember, SentimentAlert, Driver, AdBanner, Excursion, ExcursionBooking, SupportSession, TransportRequest } from "../types";
 import { apiFetch } from "../lib/apiClient";
 
 interface AdminHubProps {
   users: User[];
   teamMembers: TeamMember[];
   sentimentAlerts: SentimentAlert[];
+  // Needed to compute real platform revenue instead of hardcoded totals.
+  requests: TransportRequest[];
+  currentUser: User;
   onVerifyUser: (id: string) => void;
   onBanUser: (id: string) => void;
   onAddTeamMember: (member: Omit<TeamMember, 'id'>) => void;
@@ -32,6 +35,8 @@ export default function AdminHub({
   users,
   teamMembers,
   sentimentAlerts,
+  requests,
+  currentUser,
   onVerifyUser,
   onBanUser,
   onAddTeamMember,
@@ -47,6 +52,8 @@ export default function AdminHub({
   excursions = [],
   excursionBookings = [],
 }: AdminHubProps) {
+  const currentAdminName = currentUser.companyName || currentUser.name;
+
   // Support & Collaborator Chats State
   const [supportSessions, setSupportSessions] = useState<SupportSession[]>([]);
   // Holds the target session's userId (what the admin API keys sessions by), not the session's own id.
@@ -57,19 +64,45 @@ export default function AdminHub({
 
   // Additional Admin Features
   const [selectedDocPreview, setSelectedDocPreview] = useState<{ type: 'licence' | 'rc' | 'insurance' | 'patente', user: User } | null>(null);
-  const [collectedCommissions, setCollectedCommissions] = useState(24960);
-  const [adEarnings, setAdEarnings] = useState(8450);
   const [paidBookingIds, setPaidBookingIds] = useState<string[]>([]);
+
+  // Platform revenue, derived from what the platform actually recorded. These were three
+  // hardcoded numbers (154 800 / 24 960 / 8 450 DHS) with a button that added 2 400 DHS of
+  // imaginary commission to the total.
+  const PLATFORM_COMMISSION_RATE = 0.2;
+
+  const completedMissionsValue = requests
+    .filter(r => r.status === 'completed')
+    .reduce((sum, r) => sum + (r.priceDHS || 0), 0);
+  const excursionsValue = excursionBookings
+    .filter(b => b.status !== 'cancelled')
+    .reduce((sum, b) => sum + b.totalPriceDHS, 0);
+
+  const totalBusinessVolume = completedMissionsValue + excursionsValue;
+  const collectedCommissions = Math.round(totalBusinessVolume * PLATFORM_COMMISSION_RATE);
+  // Ad revenue is what the banner engine has actually billed to campaigns.
+  const adEarnings = Math.round(banners.reduce((sum, b) => sum + (b.spent || 0), 0));
   
   // Advanced Payouts & FinTech States
   const [payoutSchedule, setPayoutSchedule] = useState<'weekly' | 'request'>('weekly');
   const [minPayoutThreshold, setMinPayoutThreshold] = useState<number>(500);
-  const [transporterBankDetails, setTransporterBankDetails] = useState<{ [userId: string]: { bankName: string; rib: string; kycStatus: 'pending' | 'verified' | 'rejected' } }>({
-    'usr-atlas': { bankName: "Attijariwafa Bank", rib: "007780001234567890123456", kycStatus: 'verified' },
-    'usr-mrx': { bankName: "Banque Populaire (BCP)", rib: "021780005544332211009988", kycStatus: 'verified' },
-    'usr-sahara': { bankName: "BMCE Bank of Africa", rib: "011780009988776655443322", kycStatus: 'pending' },
-    'usr-trans-1': { bankName: "CIH Bank", rib: "018780002233445566778899", kycStatus: 'verified' }
-  });
+  // Payout bank details live on the transporter's own user record. They used to sit in this
+  // component's state pre-filled with mock ids, so every RIB an admin entered was lost on
+  // reload and the "Valider KYC" button changed nothing the rest of the platform could see.
+  const getBankDetails = (userId: string) => {
+    const owner = users.find(u => u.id === userId);
+    return {
+      bankName: owner?.bankName || 'Aucune banque',
+      rib: owner?.rib || '-',
+      kycStatus: owner?.bankKycStatus || 'pending',
+      // Payout rows are grouped by transporterId; ids coming from seeded demo aggregates
+      // have no matching user, and those rows are not editable.
+      isRealUser: Boolean(owner)
+    };
+  };
+  // Wire history starts empty and fills as payouts are actually executed from this console.
+  // It used to open with two fictional 12 480 / 7 520 DHS transfers that counted towards
+  // "déjà reversé".
   const [payoutHistory, setPayoutHistory] = useState<Array<{
     id: string;
     date: string;
@@ -82,10 +115,7 @@ export default function AdminHub({
     reference: string;
     rib: string;
     period: string;
-  }>>([
-    { id: 'pay-1', date: '2026-07-10', transporterId: 'usr-atlas', transporterName: 'Atlas Trans', amount: 15600, commission: 3120, netAmount: 12480, status: 'success', reference: 'VIR-W27-ATLAS', rib: '007780001234567890123456', period: 'Du 01/07 au 07/07' },
-    { id: 'pay-2', date: '2026-07-10', transporterId: 'usr-mrx', transporterName: 'Marrakech Express', amount: 9400, commission: 1880, netAmount: 7520, status: 'success', reference: 'VIR-W27-MRX', rib: '021780005544332211009988', period: 'Du 01/07 au 07/07' }
-  ]);
+  }>>([]);
   const [payoutAnomalies, setPayoutAnomalies] = useState<Array<{
     id: string;
     date: string;
@@ -95,9 +125,7 @@ export default function AdminHub({
     reason: string;
     status: 'failed' | 'retrying' | 'resolved';
     rib: string;
-  }>>([
-    { id: 'an-1', date: '2026-07-14', transporterId: 'usr-sahara', transporterName: 'Sahara Tours', amount: 4800, reason: 'Compte destinataire gelé ou introuvable (Rejet BMCE)', status: 'failed', rib: '011780009988776655443322' }
-  ]);
+  }>>([]);
   const [payoutDisputes, setPayoutDisputes] = useState<Array<{
     id: string;
     date: string;
@@ -107,22 +135,17 @@ export default function AdminHub({
     type: string;
     description: string;
     status: 'open' | 'refunded_client' | 'deducted_next_payout' | 'closed_no_action';
-  }>>([
-    { id: 'disp-1', date: '2026-07-12', bookingId: 'bk-ext-910', transporterName: 'Atlas Trans', amount: 800, type: 'Retard de prise en charge', description: 'Le client se plaint de 45 min de retard au départ du Riad.', status: 'open' },
-    { id: 'disp-2', date: '2026-07-08', bookingId: 'bk-ext-802', transporterName: 'Marrakech Express', amount: 1200, type: 'Climatisation en panne', description: 'Le minibus avait la clim en panne sous 44°C.', status: 'deducted_next_payout' }
-  ]);
+  }>>([]);
   const [selectedStatementPayout, setSelectedStatementPayout] = useState<any | null>(null);
   const [payoutTab, setPayoutTab] = useState<'overview' | 'transactions' | 'carriers' | 'config' | 'anomalies'>('overview');
   const [editingRibPartnerId, setEditingRibPartnerId] = useState<string | null>(null);
   const [editingRibValue, setEditingRibValue] = useState<string>('');
   const [editingBankName, setEditingBankName] = useState<string>('');
 
-  const [complianceLogs, setComplianceLogs] = useState<Array<{ id: string; timestamp: string; actor: string; action: string; category: 'kyc' | 'sentiment' | 'billing' | 'ads'; level: 'info' | 'warning' | 'success' }>>([
-    { id: 'log-1', timestamp: '11:15', actor: 'Admin Youssef', action: 'Connexion sécurisée au terminal de pilotage.', category: 'kyc', level: 'info' },
-    { id: 'log-2', timestamp: '10:45', actor: 'Samir Driss', action: 'Validation de l\'attestation RC de Atlas Trans.', category: 'kyc', level: 'success' },
-    { id: 'log-3', timestamp: '09:30', actor: 'Filtre Sentiment', action: 'Détection d\'une insatisfaction sur le trajet d-1 (Riad Royal).', category: 'sentiment', level: 'warning' },
-    { id: 'log-4', timestamp: '08:15', actor: 'Régie Pub', action: 'Lancement de la campagne AXA Assurances.', category: 'ads', level: 'info' },
-  ]);
+  // Audit trail for actions taken during this session. It used to open with four invented
+  // entries attributed to named colleagues; it now starts empty and only records what the
+  // signed-in administrator actually does. (Not yet persisted — see the note in the panel.)
+  const [complianceLogs, setComplianceLogs] = useState<Array<{ id: string; timestamp: string; actor: string; action: string; category: 'kyc' | 'sentiment' | 'billing' | 'ads'; level: 'info' | 'warning' | 'success' }>>([]);
 
   const addComplianceLog = (action: string, category: 'kyc' | 'sentiment' | 'billing' | 'ads', level: 'info' | 'warning' | 'success' = 'info') => {
     const now = new Date();
@@ -131,7 +154,7 @@ export default function AdminHub({
       {
         id: `log-${Date.now()}`,
         timestamp: timeStr,
-        actor: 'Admin Youssef',
+        actor: currentAdminName,
         action,
         category,
         level
@@ -142,16 +165,9 @@ export default function AdminHub({
 
   // Team collaborators chats (simulated messages)
   const [selectedCollaboratorId, setSelectedCollaboratorId] = useState<string | null>(null);
-  const [collaboratorChats, setCollaboratorChats] = useState<{ [key: string]: any[] }>({
-    "tm-1": [
-      { sender: "Samir Driss", text: "Bonjour Youssef, j'ai vérifié la licence de Atlas Transport. Tout est conforme, je valide leur dossier.", time: "Hier" },
-      { sender: "Moi", text: "Parfait Samir, merci pour la réactivité.", time: "Hier" }
-    ],
-    "tm-2": [
-      { sender: "Siham El Fassi", text: "Youssef, j'ai une alerte de sentiment négatif sur la course d'Essaouira. Le chauffeur a eu une panne mécanique.", time: "10:30" },
-      { sender: "Moi", text: "Je m'en occupe, j'envoie un chauffeur de remplacement.", time: "10:32" }
-    ]
-  });
+  // Internal notes exchanged with staff members during this session. Previously pre-filled
+  // with two invented conversations attributed to real-looking colleagues.
+  const [collaboratorChats, setCollaboratorChats] = useState<{ [key: string]: any[] }>({});
   const [collabReplyText, setCollabReplyText] = useState("");
 
   const fetchSupportSessions = async () => {
@@ -565,27 +581,15 @@ export default function AdminHub({
               <p className="text-[10px] text-gray-500 font-medium">Suivi en direct des flux de commissions prélevés (20% sur les retours à vide) et revenus de la régie publicitaire.</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => {
-                // Simulate receiving a new payment
-                const newCommission = 2400;
-                setCollectedCommissions(prev => prev + newCommission);
-                addComplianceLog(`Nouvelle commission collectée automatiquement : +${newCommission} DHS (Retour à vide validé).`, 'billing', 'success');
-              }}
-              className="rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs px-3 py-1.5 transition cursor-pointer flex items-center gap-1 shrink-0"
-            >
-              <Coins className="h-3.5 w-3.5" />
-              Simuler encaissement commission (+2,400 DHS)
-            </button>
-          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="rounded-xl bg-slate-50 border border-[#E1E3E5] p-3.5 text-left space-y-1">
             <p className="text-[10px] font-bold text-[#6D7175] uppercase tracking-wider">Volume d'Affaires Global</p>
-            <p className="text-xl font-extrabold text-slate-900 font-mono">154,800 DHS</p>
-            <p className="text-[9px] text-[#008060] font-bold">✓ 100% des transactions sécurisées</p>
+            <p className="text-xl font-extrabold text-slate-900 font-mono">{totalBusinessVolume.toLocaleString('fr-FR')} DHS</p>
+            <p className="text-[9px] text-[#008060] font-bold">
+              Missions terminées + réservations d'excursion
+            </p>
           </div>
           <div className="rounded-xl bg-[#EBF5F1] border border-[#BBE3D1] p-3.5 text-left space-y-1">
             <p className="text-[10px] font-bold text-[#008060] uppercase tracking-wider">Commissions Collectées (20%)</p>
@@ -616,18 +620,16 @@ export default function AdminHub({
           .filter(b => b.status !== 'cancelled')
           .reduce((sum, b) => sum + Math.round(b.totalPriceDHS * 0.20), 0);
 
-        // Seed amounts for full-stack realistic representation
-        const seedSales = 154800;
-        const seedCommissions = 30960; // 20% of seed
-        const seedPaid = 104000;
-
+        // Every figure below is derived from recorded activity. It previously started from
+        // three invented constants (154 800 / 30 960 / 104 000 DHS) plus a flat 12 800 DHS
+        // of "simulated pending B2B", so the console never showed the real position.
         const financialFlows = {
-          totalEncaisse: seedSales + baseSalesExcursions, // Total collected from customers
-          commissionsCumulees: seedCommissions + baseCommissionsExcursions + (collectedCommissions - 24960), // Excursions + Empty Returns commissions
-          dejaReverse: seedPaid + payoutHistory.filter(h => h.status === 'success').reduce((sum, h) => sum + h.netAmount, 0),
+          totalEncaisse: totalBusinessVolume,
+          commissionsCumulees: collectedCommissions,
+          dejaReverse: payoutHistory.filter(h => h.status === 'success').reduce((sum, h) => sum + h.netAmount, 0),
           enAttente: excursionBookings
             .filter(b => b.status !== 'cancelled' && !paidBookingIds.includes(b.id))
-            .reduce((sum, b) => sum + Math.round(b.totalPriceDHS * 0.80), 0) + 12800, // pending excursions + simulated pending B2B
+            .reduce((sum, b) => sum + Math.round(b.totalPriceDHS * 0.80), 0),
           disputesOnHold: payoutDisputes.filter(d => d.status === 'open').reduce((sum, d) => sum + d.amount, 0),
         };
 
@@ -644,33 +646,14 @@ export default function AdminHub({
           bookings: ExcursionBooking[];
         }} = {};
 
-        // Prepopulate with seed transporters
-        const seedTransporters = [
-          { id: 'usr-atlas', name: 'Atlas Trans', sales: 64000, bookingsCount: 14 },
-          { id: 'usr-mrx', name: 'Marrakech Express', sales: 42000, bookingsCount: 8 },
-          { id: 'usr-sahara', name: 'Sahara Tours', sales: 48800, bookingsCount: 10 },
-        ];
-
-        seedTransporters.forEach(t => {
-          const comm = Math.round(t.sales * 0.20);
-          const net = t.sales - comm;
-          transporterGroups[t.id] = {
-            id: t.id,
-            name: t.name,
-            bookingsCount: t.bookingsCount,
-            totalSales: t.sales,
-            commission: comm,
-            netToPay: net,
-            paidAmount: net - 4800, // Atlas & MRX have been mostly paid except some pending threshold / dispute
-            pendingAmount: 4800,
-            bookings: []
-          };
-        });
-
-        // Add real live excursion bookings
+        // This list used to be prepopulated with three fictional companies ("Atlas Trans",
+        // "Marrakech Express", "Sahara Tours") carrying 154 800 DHS of invented sales, which
+        // then flowed into the payout totals and the RIB table. It is now built purely from
+        // recorded bookings.
         excursionBookings.forEach(booking => {
           if (booking.status === 'cancelled') return;
-          const key = booking.transporterId || 'usr-trans-1';
+          const key = booking.transporterId;
+          if (!key) return;
           const isPaid = paidBookingIds.includes(booking.id);
           
           const sales = booking.totalPriceDHS;
@@ -709,25 +692,37 @@ export default function AdminHub({
         const [transSearch, setTransSearch] = useState('');
         const [transStatusFilter, setTransStatusFilter] = useState<'all' | 'pending' | 'paid' | 'disputed'>('all');
 
-        // All simulated + real transactions
+        // Real transactions only. Four hardcoded "B2B Shuttle" rows worth 24 500 DHS used to
+        // be appended here and counted in the totals below.
         const allTransactions = [
           ...excursionBookings.map(b => ({
             id: b.id,
-            date: b.date || '2026-07-17',
+            date: b.date,
             partner: b.clientName,
             transporter: b.transporterName,
             transporterId: b.transporterId,
             tourTitle: b.excursionTitle,
             montantBrut: b.totalPriceDHS,
-            commission: Math.round(b.totalPriceDHS * 0.20),
-            netDu: Math.round(b.totalPriceDHS * 0.80),
+            commission: Math.round(b.totalPriceDHS * PLATFORM_COMMISSION_RATE),
+            netDu: Math.round(b.totalPriceDHS * (1 - PLATFORM_COMMISSION_RATE)),
             status: paidBookingIds.includes(b.id) ? 'paid' : (payoutDisputes.some(d => d.bookingId === b.id && d.status === 'open') ? 'disputed' : 'pending'),
             type: 'Excursion'
           })),
-          { id: 'bk-ext-910', date: '2026-07-12', partner: 'Agence Horizon', transporter: 'Atlas Trans', transporterId: 'usr-atlas', tourTitle: 'Excursion d\'une journée à Ouzoud', montantBrut: 4000, commission: 800, netDu: 3200, status: 'disputed', type: 'B2B Shuttle' },
-          { id: 'bk-ext-802', date: '2026-07-08', partner: 'Hotel Royal', transporter: 'Marrakech Express', transporterId: 'usr-mrx', tourTitle: 'Désert d\'Agafay - Quad & Dîner', montantBrut: 6000, commission: 1200, netDu: 4800, status: 'paid', type: 'B2B Shuttle' },
-          { id: 'bk-ext-704', date: '2026-07-06', partner: 'Riad Jasmine', transporter: 'Sahara Tours', transporterId: 'usr-sahara', tourTitle: '3 Jours Grand Sud Marocain', montantBrut: 12000, commission: 2400, netDu: 9600, status: 'paid', type: 'Excursion' },
-          { id: 'bk-ext-601', date: '2026-07-05', partner: 'Jean Dupont', transporter: 'Atlas Trans', transporterId: 'usr-atlas', tourTitle: 'Essaouira & Côte Atlantique', montantBrut: 2500, commission: 500, netDu: 2000, status: 'paid', type: 'Excursion' }
+          ...requests
+            .filter(r => r.status === 'completed' && r.priceDHS)
+            .map(r => ({
+              id: r.id,
+              date: r.dateTime,
+              partner: r.clientName,
+              transporter: r.transporterId ?? '—',
+              transporterId: r.transporterId ?? '',
+              tourTitle: `${r.origin} → ${r.destination}`,
+              montantBrut: r.priceDHS as number,
+              commission: Math.round((r.priceDHS as number) * PLATFORM_COMMISSION_RATE),
+              netDu: Math.round((r.priceDHS as number) * (1 - PLATFORM_COMMISSION_RATE)),
+              status: paidBookingIds.includes(r.id) ? 'paid' : 'pending',
+              type: 'Mission B2B'
+            }))
         ];
 
         const filteredTransactions = allTransactions.filter(t => {
@@ -748,8 +743,8 @@ export default function AdminHub({
             const minSeuil = minPayoutThreshold;
             if (partner.pendingAmount >= minSeuil) {
               // Get pending bookings of this partner
-              const bank = transporterBankDetails[partner.id] || { bankName: 'Standard Marocaine', rib: '000000000000000000000000', kycStatus: 'pending' };
-              
+              const bank = getBankDetails(partner.id);
+
               if (bank.kycStatus !== 'verified') {
                 addComplianceLog(`Échec virement de ${partner.pendingAmount} DHS pour ${partner.name} : KYC Bancaire non validé.`, 'billing', 'warning');
                 // Create an anomaly entry
@@ -948,7 +943,7 @@ export default function AdminHub({
                       </thead>
                       <tbody className="divide-y divide-[#E1E3E5]">
                         {collaboratorPayouts.map(partner => {
-                          const bank = transporterBankDetails[partner.id] || { bankName: 'Non saisie', rib: '-', kycStatus: 'pending' };
+                          const bank = getBankDetails(partner.id);
                           return (
                             <tr key={partner.id} className="hover:bg-gray-50/50 transition">
                               <td className="py-3 px-4 font-bold text-slate-900">
@@ -1164,7 +1159,7 @@ export default function AdminHub({
                       </thead>
                       <tbody className="divide-y divide-gray-100">
                         {collaboratorPayouts.map(p => {
-                          const bank = transporterBankDetails[p.id] || { bankName: 'Aucune banque', rib: '-', kycStatus: 'pending' };
+                          const bank = getBankDetails(p.id);
                           const isEditing = editingRibPartnerId === p.id;
                           return (
                             <tr key={p.id} className="hover:bg-slate-50/50">
@@ -1213,14 +1208,11 @@ export default function AdminHub({
                                   <div className="flex items-center gap-1 justify-center">
                                     <button
                                       onClick={() => {
-                                        setTransporterBankDetails(prev => ({
-                                          ...prev,
-                                          [p.id]: {
-                                            bankName: editingBankName,
-                                            rib: editingRibValue,
-                                            kycStatus: 'verified' // Auto verify on update
-                                          }
-                                        }));
+                                        onUpdateUser(p.id, {
+                                          bankName: editingBankName,
+                                          rib: editingRibValue,
+                                          bankKycStatus: 'verified' // Auto verify on update
+                                        });
                                         setEditingRibPartnerId(null);
                                         addComplianceLog(`RIB de ${p.name} mis à jour : ${editingBankName} (${editingRibValue}). KYC Validé d'office.`, 'billing', 'success');
                                       }}
@@ -1240,20 +1232,19 @@ export default function AdminHub({
                                     <button
                                       onClick={() => {
                                         setEditingRibPartnerId(p.id);
-                                        setEditingBankName(bank.bankName);
-                                        setEditingRibValue(bank.rib);
+                                        setEditingBankName(bank.isRealUser ? bank.bankName : '');
+                                        setEditingRibValue(bank.isRealUser ? bank.rib : '');
                                       }}
-                                      className="text-[10px] text-slate-800 font-bold hover:underline"
+                                      disabled={!bank.isRealUser}
+                                      title={bank.isRealUser ? undefined : "Ce partenaire n'a pas encore de compte Mumy."}
+                                      className="text-[10px] text-slate-800 font-bold hover:underline disabled:cursor-not-allowed disabled:text-gray-300 disabled:no-underline"
                                     >
                                       Modifier RIB
                                     </button>
-                                    {bank.kycStatus === 'pending' && (
+                                    {bank.isRealUser && bank.kycStatus === 'pending' && (
                                       <button
                                         onClick={() => {
-                                          setTransporterBankDetails(prev => ({
-                                            ...prev,
-                                            [p.id]: { ...prev[p.id], kycStatus: 'verified' }
-                                          }));
+                                          onUpdateUser(p.id, { bankKycStatus: 'verified' });
                                           addComplianceLog(`Dossier KYC Bancaire de ${p.name} approuvé par l'administrateur.`, 'kyc', 'success');
                                         }}
                                         className="text-[9px] text-[#008060] font-black hover:underline"
@@ -1418,23 +1409,35 @@ export default function AdminHub({
                       </div>
                     </div>
 
+                    {/* Builds a consolidated statement from the period's real figures. It
+                        used to open a fixed 72 000 DHS statement for "Atlas Trans" whatever
+                        the console actually contained. */}
                     <button
                       onClick={() => {
-                        const simulatedPayout = {
-                          id: 'pay-temp',
-                          date: '2026-07-17',
-                          transporterId: 'usr-atlas',
-                          transporterName: 'Atlas Trans',
-                          amount: 72000,
-                          commission: 14400,
-                          netAmount: 57600,
+                        if (collaboratorPayouts.length === 0) {
+                          addComplianceLog(
+                            "Relevé consolidé impossible : aucune transaction enregistrée sur la période.",
+                            'billing',
+                            'warning'
+                          );
+                          return;
+                        }
+                        const gross = collaboratorPayouts.reduce((sum, p) => sum + p.totalSales, 0);
+                        const commission = collaboratorPayouts.reduce((sum, p) => sum + p.commission, 0);
+                        setSelectedStatementPayout({
+                          id: 'releve-consolide',
+                          date: new Date().toISOString().split('T')[0],
+                          transporterId: '',
+                          transporterName: `${collaboratorPayouts.length} partenaire(s)`,
+                          amount: gross,
+                          commission,
+                          netAmount: gross - commission,
                           status: 'success',
-                          reference: 'RELEVE-CONSOLIDE-M7',
-                          rib: '007780001234567890123456',
-                          period: 'Période consolidée du 01/07/2026 au 17/07/2026'
-                        };
-                        setSelectedStatementPayout(simulatedPayout);
-                        addComplianceLog(`Relevé financier généré et téléchargé au format PDF pour Atlas Trans.`, 'billing', 'success');
+                          reference: `RELEVE-CONSOLIDE-${new Date().toISOString().slice(0, 7)}`,
+                          rib: '—',
+                          period: `Relevé consolidé arrêté au ${new Date().toLocaleDateString('fr-FR')}`
+                        });
+                        addComplianceLog('Relevé financier consolidé généré.', 'billing', 'success');
                       }}
                       className="w-full py-2 bg-[#008060] hover:bg-[#006e52] text-white text-xs font-bold rounded-lg transition text-center flex items-center justify-center gap-1 cursor-pointer mt-4"
                     >
@@ -2197,10 +2200,13 @@ export default function AdminHub({
 
                   {/* Summary Business IDs */}
                   <div className="rounded-lg bg-white p-3 border border-[#E1E3E5] text-[10px] grid grid-cols-2 md:grid-cols-4 gap-2 text-[#6D7175]">
-                    <div><span className="font-bold text-[#1A1A1A]">ICE:</span> <span className="font-mono">{selectedKycUser.ice || '001548796000085'}</span></div>
-                    <div><span className="font-bold text-[#1A1A1A]">R.C.:</span> <span className="font-mono">{selectedKycUser.rc || '98455-Marrakech'}</span></div>
-                    <div><span className="font-bold text-[#1A1A1A]">Patente:</span> <span className="font-mono">{selectedKycUser.patente || '45879621'}</span></div>
-                    <div><span className="font-bold text-[#1A1A1A]">I.F.:</span> <span className="font-mono">{selectedKycUser.ifFiscal || '12457896'}</span></div>
+                    {/* Never fall back to specimen numbers on a KYC screen: an administrator
+                        approving a dossier must see exactly what the transporter declared,
+                        including the blanks. */}
+                    <div><span className="font-bold text-[#1A1A1A]">ICE:</span> <span className="font-mono">{selectedKycUser.ice || <em className="text-amber-700 not-italic font-bold">non déclaré</em>}</span></div>
+                    <div><span className="font-bold text-[#1A1A1A]">R.C.:</span> <span className="font-mono">{selectedKycUser.rc || <em className="text-amber-700 not-italic font-bold">non déclaré</em>}</span></div>
+                    <div><span className="font-bold text-[#1A1A1A]">Patente:</span> <span className="font-mono">{selectedKycUser.patente || <em className="text-amber-700 not-italic font-bold">non déclarée</em>}</span></div>
+                    <div><span className="font-bold text-[#1A1A1A]">I.F.:</span> <span className="font-mono">{selectedKycUser.ifFiscal || <em className="text-amber-700 not-italic font-bold">non déclaré</em>}</span></div>
                   </div>
 
                   {selectedKycUser.role === 'transporter' && (
@@ -3717,7 +3723,7 @@ export default function AdminHub({
                       <>
                         <div className="grid grid-cols-3 border-b border-slate-100 py-1.5 gap-2">
                           <span className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">Numéro d'ICE :</span>
-                          <span className="col-span-2 font-mono font-bold text-slate-950">{docUser.ice || '001548796000085'}</span>
+                          <span className="col-span-2 font-mono font-bold text-slate-950">{docUser.ice || 'non déclaré'}</span>
                         </div>
                         <div className="grid grid-cols-3 border-b border-slate-100 py-1.5 gap-2">
                           <span className="font-bold text-slate-400 uppercase tracking-wider text-[9px]">Forme Juridique :</span>

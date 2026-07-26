@@ -21,6 +21,30 @@ export function useCreateRequest() {
   });
 }
 
+// Transporter-side "direct lead": a booking taken off-platform, owned by the transporter
+// from creation (the backend fills in transporterId and leaves clientId null).
+export function useCreateDirectLead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (req: Partial<TransportRequest> & { clientName: string }) =>
+      apiFetch<TransportRequest>('/api/requests', { method: 'POST', body: JSON.stringify(req) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+// Post-dispatch edits to a mission: proof of delivery, attached paperwork, price, notes.
+export function useUpdateRequestDetails() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ requestId, updated }: { requestId: string; updated: Partial<TransportRequest> }) =>
+      apiFetch<TransportRequest>(`/api/requests/${requestId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(updated),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
 export function useAssignDriver() {
   const qc = useQueryClient();
   return useMutation({

@@ -14,6 +14,17 @@ export function useMyDriver() {
   return useQuery({ queryKey: ['drivers', 'me'], queryFn: () => apiFetch<Driver>('/api/drivers/me') });
 }
 
+// A driver toggling their own availability. Separate from useUpdateDriver, which is the
+// employing transporter editing an employee record they own.
+export function useUpdateMyDriverStatus() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (isOnline: boolean) =>
+      apiFetch<Driver>('/api/drivers/me', { method: 'PATCH', body: JSON.stringify({ isOnline }) }),
+    onSuccess: (driver) => qc.setQueryData(['drivers', 'me'], driver),
+  });
+}
+
 export function useAddDriver() {
   const qc = useQueryClient();
   return useMutation({

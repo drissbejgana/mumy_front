@@ -26,6 +26,35 @@ export function useUpdateVehicle() {
   });
 }
 
+type MaintenanceLog = NonNullable<Vehicle['maintenanceLogs']>[number];
+type FuelLog = NonNullable<Vehicle['fuelLogs']>[number];
+
+// Dedicated append endpoints. Re-sending the whole log array through PATCH (as the fleet
+// forms used to) rewrites every subdocument on each save and loses concurrent entries.
+export function useAddMaintenanceLog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ vehicleId, log }: { vehicleId: string; log: Omit<MaintenanceLog, 'id'> }) =>
+      apiFetch<Vehicle>(`/api/vehicles/${vehicleId}/maintenance-logs`, {
+        method: 'POST',
+        body: JSON.stringify(log),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
+export function useAddFuelLog() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ vehicleId, log }: { vehicleId: string; log: Omit<FuelLog, 'id'> }) =>
+      apiFetch<Vehicle>(`/api/vehicles/${vehicleId}/fuel-logs`, {
+        method: 'POST',
+        body: JSON.stringify(log),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
+  });
+}
+
 export function useDeleteVehicle() {
   const qc = useQueryClient();
   return useMutation({

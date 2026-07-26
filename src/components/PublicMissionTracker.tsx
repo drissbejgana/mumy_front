@@ -77,20 +77,11 @@ export default function PublicMissionTracker({ requestId, onClose }: PublicMissi
 
   const { request, banners } = data;
 
-  // Default to Ahmed and Mercedes Class V if no driver/vehicle assigned yet
-  const driver = data.driver || {
-    name: "Ahmed El Mansouri",
-    phone: "+212 6 61 23 45 67",
-    rating: 4.9,
-    avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100&auto=format&fit=crop&q=80"
-  };
-
-  const vehicle = data.vehicle || {
-    brand: "Mercedes-Benz",
-    model: "Classe V Luxe",
-    plate: "44-A-12345",
-    fuelType: "Gazole"
-  };
+  // No placeholder driver or vehicle here. This page is shared with the passenger waiting
+  // at the kerb: inventing a name, a phone number and a licence plate for an unassigned
+  // mission tells them to look for a car that is not coming.
+  const driver = data.driver;
+  const vehicle = data.vehicle;
 
   // Compute states for steps
   const isEnRoute = ['en_route', 'picked_up', 'completed'].includes(request.status);
@@ -353,33 +344,42 @@ export default function PublicMissionTracker({ requestId, onClose }: PublicMissi
               <h4 className="text-[10px] font-bold text-[#6D7175] uppercase tracking-wider border-b border-[#F1F2F4] pb-2 mb-3">
                 Votre Chauffeur Mumy
               </h4>
-              <div className="flex items-center gap-3">
-                <img 
-                  src={driver.avatarUrl} 
-                  className="h-12 w-12 rounded-full object-cover border-2 border-emerald-50 shadow-sm"
-                  alt="Avatar"
-                />
-                <div>
-                  <h5 className="text-xs font-bold text-[#1A1A1A]">{driver.name}</h5>
-                  <span className="text-[10px] text-gray-500 font-medium">Chauffeur Privé Certifié B2B</span>
-                  <div className="flex items-center gap-1 mt-0.5">
-                    <span className="text-amber-500 text-xs">★</span>
-                    <span className="text-[10px] font-bold">{driver.rating} / 5.0</span>
-                    <span className="text-[9px] text-emerald-600 bg-emerald-50 px-1 rounded font-semibold ml-1">Vérifié</span>
+              {driver ? (
+                <div className="flex items-center gap-3">
+                  <img
+                    src={driver.avatarUrl}
+                    className="h-12 w-12 rounded-full object-cover border-2 border-emerald-50 shadow-sm"
+                    alt="Avatar"
+                  />
+                  <div>
+                    <h5 className="text-xs font-bold text-[#1A1A1A]">{driver.name}</h5>
+                    <span className="text-[10px] text-gray-500 font-medium">Chauffeur Privé Certifié B2B</span>
+                    <div className="flex items-center gap-1 mt-0.5">
+                      <span className="text-amber-500 text-xs">★</span>
+                      <span className="text-[10px] font-bold">{driver.rating} / 5.0</span>
+                      <span className="text-[9px] text-emerald-600 bg-emerald-50 px-1 rounded font-semibold ml-1">Vérifié</span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <p className="text-[11px] font-medium text-gray-500 leading-relaxed">
+                  Aucun chauffeur n'est encore assigné à cette mission. Ses coordonnées
+                  apparaîtront ici dès que le transporteur l'aura désigné.
+                </p>
+              )}
             </div>
 
-            <div className="mt-4 pt-4 border-t border-[#F1F2F4]">
-              <a 
-                href={`tel:${driver.phone}`}
-                className="w-full inline-flex justify-center items-center gap-2 px-3 py-2 bg-white hover:bg-gray-50 text-[#1A1A1A] border border-[#E1E3E5] rounded-xl text-xs font-bold transition shadow-xs"
-              >
-                <Phone className="h-3.5 w-3.5 text-[#008060]" />
-                Contacter le chauffeur
-              </a>
-            </div>
+            {driver?.phone && (
+              <div className="mt-4 pt-4 border-t border-[#F1F2F4]">
+                <a
+                  href={`tel:${driver.phone}`}
+                  className="w-full inline-flex justify-center items-center gap-2 px-3 py-2 bg-white hover:bg-gray-50 text-[#1A1A1A] border border-[#E1E3E5] rounded-xl text-xs font-bold transition shadow-xs"
+                >
+                  <Phone className="h-3.5 w-3.5 text-[#008060]" />
+                  Contacter le chauffeur
+                </a>
+              </div>
+            )}
           </div>
 
           {/* Vehicle details */}
@@ -388,22 +388,30 @@ export default function PublicMissionTracker({ requestId, onClose }: PublicMissi
               <h4 className="text-[10px] font-bold text-[#6D7175] uppercase tracking-wider border-b border-[#F1F2F4] pb-2 mb-3">
                 Véhicule de Transport
               </h4>
-              <div className="space-y-2">
-                <div className="flex justify-between text-xs py-1">
-                  <span className="text-gray-500">Modèle</span>
-                  <span className="font-bold text-gray-900">{vehicle.brand} {vehicle.model}</span>
+              {vehicle ? (
+                <div className="space-y-2">
+                  <div className="flex justify-between text-xs py-1">
+                    <span className="text-gray-500">Modèle</span>
+                    <span className="font-bold text-gray-900">{vehicle.brand} {vehicle.model}</span>
+                  </div>
+                  <div className="flex justify-between text-xs py-1">
+                    <span className="text-gray-500">Immatriculation</span>
+                    <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-800 border border-slate-200">
+                      {vehicle.plate}
+                    </span>
+                  </div>
+                  {vehicle.fuelType && (
+                    <div className="flex justify-between text-xs py-1">
+                      <span className="text-gray-500">Carburant</span>
+                      <span className="font-bold text-[#008060]">{vehicle.fuelType}</span>
+                    </div>
+                  )}
                 </div>
-                <div className="flex justify-between text-xs py-1">
-                  <span className="text-gray-500">Immatriculation</span>
-                  <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-[10px] font-bold text-slate-800 border border-slate-200">
-                    {vehicle.plate}
-                  </span>
-                </div>
-                <div className="flex justify-between text-xs py-1">
-                  <span className="text-gray-500">Catégorie</span>
-                  <span className="font-bold text-[#008060]">Van Premium VIP (Maroc)</span>
-                </div>
-              </div>
+              ) : (
+                <p className="text-[11px] font-medium text-gray-500 leading-relaxed">
+                  Le véhicule sera affiché ici dès son affectation à la mission.
+                </p>
+              )}
             </div>
 
             <div className="mt-4 pt-3 border-t border-[#F1F2F4] text-[10px] text-gray-500 flex items-center gap-1.5 bg-amber-50/50 p-2 rounded-lg border border-amber-100">

@@ -7,6 +7,57 @@ import {
 } from "lucide-react";
 import { TransportRequest, Bid, EmptyReturn, User as UserType, AdBanner, Excursion, TransporterWebsite, ExcursionBooking } from "../types";
 import SimulationAdBanner from "./SimulationAdBanner";
+import { useMissionTracking } from "../hooks/useTracking";
+
+// Shows who is genuinely coming to collect the passenger. The previous version derived a
+// name, phone, vehicle and licence plate by hashing the request id against a pool of three
+// invented drivers — the client was shown a stranger's details for their real booking.
+// The driver and vehicle now come from the mission's own redacted tracking view.
+function AssignedDriverPanel({ requestId }: { requestId: string }) {
+  const { data, isLoading } = useMissionTracking(requestId);
+  const driver = data?.driver;
+  const vehicle = data?.vehicle;
+
+  return (
+    <div className="flex justify-between items-center pb-2 border-b border-gray-100 flex-wrap gap-2">
+      <div>
+        <span className="text-[10px] text-gray-400 uppercase font-extrabold tracking-wider">Chauffeur Assigné</span>
+        <div className="flex items-center gap-2 mt-1">
+          <div className="rounded-full bg-[#008060]/10 p-1.5 text-[#008060]">
+            <User className="h-4 w-4" />
+          </div>
+          <div>
+            {isLoading ? (
+              <p className="text-[11px] text-gray-400 italic">Chargement des informations chauffeur…</p>
+            ) : driver ? (
+              <>
+                <p className="text-xs font-extrabold text-gray-900">{driver.name}</p>
+                <p className="text-[10px] text-gray-500 font-medium">
+                  {vehicle ? `${vehicle.brand} ${vehicle.model} • Plaque : ${vehicle.plate}` : 'Véhicule en cours d\'affectation'}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-xs font-extrabold text-gray-900">En cours d'affectation</p>
+                <p className="text-[10px] text-gray-500 font-medium">
+                  Le transporteur n'a pas encore désigné de chauffeur pour cette mission.
+                </p>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+      {driver?.phone && (
+        <a
+          href={`tel:${driver.phone}`}
+          className="flex items-center gap-1 bg-[#EBF5F1] text-[#008060] font-bold text-[10px] px-3 py-2 rounded-lg border border-[#BBE3D1] hover:bg-[#d0ebd9] transition"
+        >
+          <Phone className="h-3.5 w-3.5" /> Appeler Chauffeur
+        </a>
+      )}
+    </div>
+  );
+}
 
 interface ClientHubProps {
   users: UserType[];
@@ -56,8 +107,10 @@ export default function ClientHub({
   // Flash request form state
   const [formData, setFormData] = useState({
     passengerName: '',
-    origin: 'Aéroport Marrakech-Menara (RAK)',
-    destination: 'Riad Royal (Médina)',
+    // Left blank rather than prefilled with a specific airport and riad — a client who
+    // skipped these fields used to submit someone else's itinerary by default.
+    origin: '',
+    destination: '',
     dateTime: '',
     paxCount: 2,
     serviceType: 'simple' as 'simple' | 'round_trip' | 'disposal' | 'multistop',
@@ -105,32 +158,20 @@ export default function ClientHub({
     paxCount: 2
   });
 
-  const TRANSPORTER_RATINGS: Record<string, number> = {
-    'Atlas Trans Marrakech': 4.9,
-    'Sahara Rides Agadir': 4.6,
-    'Marrakech Comfort Voyages': 4.8,
-    'Vanguard Comfort Marrakech': 4.7,
-    'Sahara Tours Agadir': 4.5,
-    'Atlas Vista Transport': 4.8
-  };
-
-  const getTransporterRating = (name: string): number => {
-    return TRANSPORTER_RATINGS[name] || 4.7;
+  // Real transporter rating, averaged over the ratings clients have actually left on that
+  // transporter's completed missions. This used to be a hardcoded table of six company
+  // names with a 4.7 fallback, so every transporter — including brand-new ones — displayed
+  // a flattering score nobody had given them.
+  const getTransporterRating = (name: string): number | null => {
+    const scores = requests
+      .filter(r => r.transporterRating && bids.some(b => b.requestId === r.id && b.transporterName === name && b.status === 'accepted'))
+      .map(r => r.transporterRating as number);
+    if (scores.length === 0) return null;
+    return Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10;
   };
 
   // Dynamic status tracking state for Client Pro
   const [localStatuses, setLocalStatuses] = useState<Record<string, 'accepted' | 'en_route' | 'picked_up' | 'completed'>>({});
-
-  const MOCK_DRIVERS_POOL = [
-    { name: 'Hicham El Alami', phone: '+212 6 61 23 45 67', vehicle: 'Mercedes V-Class Black VIP', plate: '12345-A-26' },
-    { name: 'Youssef Benjelloun', phone: '+212 6 62 98 76 54', vehicle: 'Hyundai H350 Premium', plate: '98765-B-44' },
-    { name: 'Karim Mansouri', phone: '+212 6 63 45 67 89', vehicle: 'Toyota Prado VIP 4x4', plate: '54321-C-26' }
-  ];
-
-  const getAssignedDriver = (requestId: string) => {
-    const num = requestId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    return MOCK_DRIVERS_POOL[num % MOCK_DRIVERS_POOL.length];
-  };
 
   const getRequestStatus = (req: TransportRequest) => {
     return localStatuses[req.id] || req.status;
@@ -150,8 +191,8 @@ export default function ClientHub({
 
   const handleRequestSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.passengerName || !formData.dateTime) {
-      triggerSuccessBanner("Veuillez remplir tous les champs obligatoires.");
+    if (!formData.passengerName || !formData.dateTime || !formData.origin.trim() || !formData.destination.trim()) {
+      triggerSuccessBanner("Veuillez renseigner le passager, le lieu de départ, la destination et la date.");
       return;
     }
     // Validation check: if disposal and not half day, days count is mandatory
@@ -184,8 +225,8 @@ export default function ClientHub({
     // Reset
     setFormData({
       passengerName: '',
-      origin: 'Aéroport Marrakech-Menara (RAK)',
-      destination: 'Riad Royal (Médina)',
+      origin: '',
+      destination: '',
       dateTime: '',
       paxCount: 2,
       serviceType: 'simple',
@@ -687,8 +728,10 @@ export default function ClientHub({
                   const reqInfo = requests.find(r => r.id === bid.requestId);
                   if (!reqInfo) return false;
                   
+                  // A transporter with no ratings yet is only hidden once the client asks
+                  // for a minimum score — otherwise new partners would never be visible.
                   const rating = getTransporterRating(bid.transporterName);
-                  if (rating < bidsMinRating) return false;
+                  if (bidsMinRating > 0 && (rating === null || rating < bidsMinRating)) return false;
                   if (bid.priceDHS > bidsMaxPrice) return false;
                   
                   if (bidsSearchQuery.trim() !== '') {
@@ -709,7 +752,8 @@ export default function ClientHub({
                   } else if (bidsSortKey === 'price_high_low') {
                     return b.priceDHS - a.priceDHS;
                   } else {
-                    return getTransporterRating(b.transporterName) - getTransporterRating(a.transporterName);
+                    // Unrated transporters sort last rather than being given an invented score.
+                    return (getTransporterRating(b.transporterName) ?? -1) - (getTransporterRating(a.transporterName) ?? -1);
                   }
                 });
 
@@ -785,9 +829,15 @@ export default function ClientHub({
                         <span className="text-[#6D7175] font-medium">Transporteur :</span>
                         <div className="flex items-center gap-1.5">
                           <span className="font-bold text-[#1A1A1A]">{bid.transporterName}</span>
-                          <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[9.5px] px-1.5 py-0.5 rounded font-extrabold flex items-center gap-0.5">
-                            ★ {rating.toFixed(1)}
-                          </span>
+                          {rating !== null ? (
+                            <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[9.5px] px-1.5 py-0.5 rounded font-extrabold flex items-center gap-0.5">
+                              ★ {rating.toFixed(1)}
+                            </span>
+                          ) : (
+                            <span className="bg-gray-50 text-gray-500 border border-gray-200 text-[9.5px] px-1.5 py-0.5 rounded font-bold">
+                              Pas encore noté
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="flex justify-between items-center text-[10px] border-t border-dashed border-gray-300 pt-1.5 mt-1.5">
@@ -891,35 +941,19 @@ export default function ClientHub({
                   {users
                     .filter(u => u.role === 'transporter' && u.status === 'verified')
                     .map((user) => {
-                      const staticData = [
-                        {
-                          name: "Atlas Trans Marrakech",
-                          rating: 4.9,
-                          reviews: 142,
-                          fleet: "8 Sprinters, 4 Vito VIP, 2 Range Rover",
-                          specialties: "Transferts aéroports, excursions VIP, accueil protocolaire",
-                          phone: "+212 6 61 23 45 67",
-                          license: "Licence Ministérielle N° 2854/2022"
-                        },
-                        {
-                          name: "Sahara Rides Agadir",
-                          rating: 4.8,
-                          reviews: 89,
-                          fleet: "12 Minibus Coaster, 5 Toyota Prado",
-                          specialties: "Circuits Sud Marocain, transfert Essaouira/Taghazout",
-                          phone: "+212 6 50 11 22 33",
-                          license: "Licence Ministérielle N° 1092/2024"
-                        }
-                      ].find(c => c.name === user.companyName || c.name === user.name);
-
+                      // Everything here is the transporter's own verified record. It used to
+                      // be padded out of a two-entry lookup table with invented review counts,
+                      // fleet inventories and — most seriously — a ministerial licence number
+                      // fabricated from the first six digits of their ICE.
+                      const name = user.companyName || user.name;
                       const carrier = {
-                        name: user.companyName || user.name,
-                        rating: staticData?.rating || 4.7,
-                        reviews: staticData?.reviews || 14,
-                        fleet: staticData?.fleet || "Flotte moderne de minibus, autocars & vans VIP",
-                        specialties: staticData?.specialties || "Tous transferts touristiques, excursions & navettes",
-                        phone: user.phone || staticData?.phone || "+212 6 00 00 00 00",
-                        license: staticData?.license || "Licence Ministérielle N° " + (user.ice ? user.ice.substring(0, 6) : "4852") + "/2026",
+                        name,
+                        rating: getTransporterRating(name),
+                        reviews: requests.filter(
+                          r => r.transporterRating && bids.some(b => b.requestId === r.id && b.transporterName === name && b.status === 'accepted')
+                        ).length,
+                        phone: user.phone,
+                        ice: user.ice,
                         isFeatured: user.isFeatured
                       };
 
@@ -941,30 +975,27 @@ export default function ClientHub({
                                 )}
                                 <span className="rounded bg-[#EBF5F1] text-[#008060] text-[9px] font-bold px-1.5 py-0.5 border border-[#BBE3D1]">CERTIFIÉ</span>
                               </h4>
-                              <p className="text-[10px] text-slate-500 mt-0.5 font-mono">{carrier.license}</p>
+                              {carrier.ice && (
+                                <p className="text-[10px] text-slate-500 mt-0.5 font-mono">ICE : {carrier.ice}</p>
+                              )}
                             </div>
-                            <div className="flex items-center gap-1 font-bold text-amber-500 text-xs">
-                              <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
-                              <span>{carrier.rating}</span>
-                              <span className="text-gray-400 font-normal">({carrier.reviews} avis)</span>
-                            </div>
-                          </div>
-
-                          <div className="grid grid-cols-2 gap-3 text-xs border-t border-b border-slate-200/60 py-2">
-                            <div>
-                              <span className="block text-[9px] text-[#6D7175] uppercase font-bold">Flotte disponible :</span>
-                              <span className="font-semibold text-gray-800">{carrier.fleet}</span>
-                            </div>
-                            <div>
-                              <span className="block text-[9px] text-[#6D7175] uppercase font-bold">Spécialités :</span>
-                              <span className="font-semibold text-gray-800">{carrier.specialties}</span>
-                            </div>
+                            {carrier.rating !== null ? (
+                              <div className="flex items-center gap-1 font-bold text-amber-500 text-xs">
+                                <Star className="h-3.5 w-3.5 fill-amber-500 text-amber-500" />
+                                <span>{carrier.rating.toFixed(1)}</span>
+                                <span className="text-gray-400 font-normal">
+                                  ({carrier.reviews} avis)
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-gray-400 font-semibold">Pas encore d'avis</span>
+                            )}
                           </div>
 
                           <div className="flex justify-between items-center text-xs pt-1">
                             <div className="flex items-center gap-1 text-[#6D7175]">
                               <Phone className="h-3.5 w-3.5 text-gray-400" />
-                              <span>{carrier.phone}</span>
+                              <span>{carrier.phone || 'Téléphone non communiqué'}</span>
                             </div>
                             <button 
                               onClick={() => triggerSuccessBanner(`Canal direct ouvert avec ${carrier.name}. Soumettez un appel d'offre pour recevoir leurs prix instantanés.`)}
@@ -1110,7 +1141,6 @@ export default function ClientHub({
           <div className="space-y-4">
             {requests.map(req => {
               const currentStatus = getRequestStatus(req);
-              const driver = getAssignedDriver(req.id);
 
               return (
                 <div key={req.id} className="rounded-xl bg-[#F6F6F7] border border-[#E1E3E5] p-5 text-xs space-y-4 animate-fade-in shadow-xs">
@@ -1141,23 +1171,7 @@ export default function ClientHub({
                   {currentStatus !== 'completed' ? (
                     /* Visual Progress Stepper */
                     <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-xs space-y-4">
-                      <div className="flex justify-between items-center pb-2 border-b border-gray-100 flex-wrap gap-2">
-                        <div>
-                          <span className="text-[10px] text-gray-400 uppercase font-extrabold tracking-wider">Chauffeur Assigné</span>
-                          <div className="flex items-center gap-2 mt-1">
-                            <div className="rounded-full bg-[#008060]/10 p-1.5 text-[#008060]">
-                              <User className="h-4 w-4" />
-                            </div>
-                            <div>
-                              <p className="text-xs font-extrabold text-gray-900">{driver.name}</p>
-                              <p className="text-[10px] text-gray-500 font-medium">{driver.vehicle} • Plate: {driver.plate}</p>
-                            </div>
-                          </div>
-                        </div>
-                        <a href={`tel:${driver.phone}`} className="flex items-center gap-1 bg-[#EBF5F1] text-[#008060] font-bold text-[10px] px-3 py-2 rounded-lg border border-[#BBE3D1] hover:bg-[#d0ebd9] transition">
-                          <Phone className="h-3.5 w-3.5" /> Appeler Chauffeur
-                        </a>
-                      </div>
+                      <AssignedDriverPanel requestId={req.id} />
 
                       {/* Visual Step Indicator */}
                       <div className="relative pt-2">

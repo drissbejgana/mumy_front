@@ -37,6 +37,9 @@ export default function App() {
     return params.get("track");
   });
 
+  // Rendered as its own component rather than returning early from App: closing the tracker
+  // flips this branch, and the authenticated branch below calls hooks the tracker branch
+  // doesn't — returning early here would change the hook count between renders and crash.
   if (trackingRequestId) {
     return (
       <PublicMissionTracker
@@ -49,6 +52,10 @@ export default function App() {
     );
   }
 
+  return <AuthGate />;
+}
+
+function AuthGate() {
   const { user, isLoading, logout, updateUser } = useAuth();
 
   if (isLoading) {
@@ -300,6 +307,8 @@ function AuthenticatedApp({
                 users={users}
                 teamMembers={teamMembers}
                 sentimentAlerts={sentimentAlerts}
+                requests={requests}
+                currentUser={currentUser}
                 onVerifyUser={handleVerifyUser}
                 onBanUser={handleBanUser}
                 onAddTeamMember={handleAddTeamMember}

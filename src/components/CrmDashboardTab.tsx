@@ -313,7 +313,7 @@ export default function CrmDashboardTab({
                   <tr className="hover:bg-gray-50 transition">
                     <td className="p-3.5 font-bold text-[#008060] flex items-center gap-2">
                       <FileText className="h-4 w-4 shrink-0 text-[#008060]" />
-                      Rapport Dispatching Pro - Atlas Trans Kesh
+                      Rapport Dispatching Pro — {currentUser.companyName || currentUser.name}
                     </td>
                     <td className="p-3.5 text-gray-500">Moi</td>
                     <td className="p-3.5 text-gray-500">Aujourd'hui, à {new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</td>
