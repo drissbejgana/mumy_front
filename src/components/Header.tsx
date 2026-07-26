@@ -69,7 +69,7 @@ export default function Header({ currentRole, currentUser, onLogout }: HeaderPro
 
           <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 bg-[#F1F2F3] rounded-full border border-[#E1E3E5]/50">
             <div className="w-2 h-2 bg-[#008060] rounded-full animate-pulse"></div>
-            <span className="text-[11px] font-semibold text-gray-700">Solde : 42 500 DHS</span>
+            {/* <span className="text-[11px] font-semibold text-gray-700">Solde : 42 500 DHS</span> */}
           </div>
 
           {/* Language Selector Dropdown */}
